@@ -1,0 +1,26 @@
+{
+  "name": "deep-pack",
+  "version": "0.0.1",
+  "description": "pack a package and pack it's dependencies",
+  "main": "deep-pack.js\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D./dist\u001b[2~/deep-pack.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doradsoft/deep-pack.git"
+  },
+  "keywords": [
+    "npm",
+    "pack",
+    "package",
+    "tgz",
+    "tar-tgz"
+  ],
+  "author": "DoradSoft",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/doradsoft/deep-pack/issues"
+  },
+  "homepage": "https://github.com/doradsoft/deep-pack#readme"
+}
