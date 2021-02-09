@@ -24,7 +24,7 @@ export default class Program {
     protected packageJSONData: IPackageJson<any> | undefined;
     protected optionArgs: OptionValues | undefined;
     protected options: Options = Program.defaultOptions;
-    protected static defaultOptions: Options = { max_depth: 1 };
+    protected static defaultOptions: Options = { max_depth: Infinity };
     public get bin(): string | undefined {
         return Object.keys(this.packageJSONData?.bin as {
             [k: string]: string;
