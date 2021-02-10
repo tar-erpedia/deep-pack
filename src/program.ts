@@ -6,7 +6,9 @@ import path from "path";
 import PackageJsonLoader, { IPackageJson } from "npm-package-json-loader";
 import Package, { PackageFullName } from "./package";
 import { exec } from "child_process";
-import Dependencies from "./dependencies";
+import Dependencies, {Events as DependenciesEvents} from "./dependencies";
+import fs from "fs";
+
 enum ExitCodes {
     SUCCESS = 0,
     GENERAL_ERROR = 1,
@@ -20,7 +22,6 @@ interface Options {
     max_depth: number;
 }
 export default class Program {
-    // protected arguments: ParseOptionsResult | undefined;
     protected packageJSONData: IPackageJson<any> | undefined;
     protected optionArgs: OptionValues | undefined;
     protected options: Options = Program.defaultOptions;
@@ -56,14 +57,17 @@ export default class Program {
         }
         this.parseOptions()
         const dependencies: Dependencies = new Dependencies(rootPackage!);
+        dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
+            await pkg.download();
+        });
         await dependencies.load(this.options.max_depth);
-        await dependencies.downloadAll();
+        // await dependencies.downloadAll();
     }
     protected parseOptions() {
         Object.entries(program.opts()).forEach((optionArg: [string, any]) => {
             const optionArgName = optionArg[0];
             const optionArgVal = optionArg[1];
-            switch (optionArgName) {
+            switch (optionArgName) { 
                 case OptionNames.MAX_DEPTH:
                     this.options.max_depth = optionArgVal === Infinity.toString() ? Infinity : parseInt(optionArgVal);
                     break;

@@ -9,6 +9,7 @@
   "scripts": {
     "start": "nodemon src/deep-pack.ts",
     "create": "npm run build && npm run test",
+    "test" : "nodemon src/deep-pack.ts tii -d 3",
     "build": "tsc -p .",
     "local": "sudo npm i -g && npm-deep-pack",
     "refresh": "rm -rf ./node_modules ./package-lock.json && npm install"
@@ -36,6 +37,7 @@
     "clear": "^0.1.0",
     "commander": "^7.0.0",
     "figlet": "^1.5.0",
+    "fs": "0.0.1-security",
     "node-fetch": "^2.6.1",
     "npm-fetch": "0.0.9",
     "npm-package-arg": "^8.1.0",
