@@ -17,7 +17,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tar.erpedia/deep-pack.git"
+    "url": "git+https://github.com/tar-erpedia/deep-pack.git"
   },
   "keywords": [
     "npm",
@@ -29,9 +29,9 @@
   "author": "DoradSoft",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/tar.erpedia/deep-pack/issues"
+    "url": "https://github.com/tar-erpedia/deep-pack/issues"
   },
-  "homepage": "https://github.com/tar.erpedia/deep-pack#readme",
+  "homepage": "https://github.com/tar-erpedia/deep-pack#readme",
   "dependencies": {
     "@types/node-fetch": "^2.5.8",
     "chalk": "^4.1.0",
