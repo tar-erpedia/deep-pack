@@ -1,22 +1,23 @@
 {
-  "name": "deep-pack",
-  "version": "0.0.1",
+  "name": "@tar-erpedia/deep-pack",
+  "version": "0.0.3",
   "description": "pack a package and pack it's dependencies",
   "main": "./lib/deep-pack.js",
   "bin": {
-    "npm-deep-pack": "./lib/deep-pack.js"
+    "npm-deep-pack": "./bin/deep-pack.js"
   },
   "scripts": {
     "start": "nodemon src/deep-pack.ts",
     "create": "npm run build && npm run test",
-    "test" : "nodemon src/deep-pack.ts tii -d 3",
+    "debug-test" : "cd ./debug && nodemon ../src/deep-pack.ts \"@vue/cli -d 3\"",
     "build": "tsc -p .",
     "local": "sudo npm i -g && npm-deep-pack",
+    "zpublish": "npm publish --access public",
     "refresh": "rm -rf ./node_modules ./package-lock.json && npm install"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/doradsoft/deep-pack.git"
+    "url": "git+https://github.com/tar.erpedia/deep-pack.git"
   },
   "keywords": [
     "npm",
@@ -28,9 +29,9 @@
   "author": "DoradSoft",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/doradsoft/deep-pack/issues"
+    "url": "https://github.com/tar.erpedia/deep-pack/issues"
   },
-  "homepage": "https://github.com/doradsoft/deep-pack#readme",
+  "homepage": "https://github.com/tar.erpedia/deep-pack#readme",
   "dependencies": {
     "@types/node-fetch": "^2.5.8",
     "chalk": "^4.1.0",

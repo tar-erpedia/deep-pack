@@ -6,8 +6,9 @@ import path from "path";
 import PackageJsonLoader, { IPackageJson } from "npm-package-json-loader";
 import Package, { PackageFullName } from "./package";
 import { exec } from "child_process";
-import Dependencies, {Events as DependenciesEvents} from "./dependencies";
+import Dependencies, { Events as DependenciesEvents } from "./dependencies";
 import fs from "fs";
+import { EOL } from "os";
 
 enum ExitCodes {
     SUCCESS = 0,
@@ -15,17 +16,34 @@ enum ExitCodes {
     NO_PACKAGE_NAME_SUPPLIED = 2,
     INVALID_PACKAGE_NAME_SUPPLIED = 3
 }
+enum Files {
+    DEPS = "deep-pack-deps-log.txt",
+    RESOLVED_DEPS = "deep-pack-resolved-deps-log.txt",
+}
 enum OptionNames {
     MAX_DEPTH = "max_depth",
+    OUT_DEPS = "out_deps",
+    OUT_RESOLVED_DEPS = "out_resolved_deps",
+    RESUME_LAST_RUN = "resume_last_run",
 }
 interface Options {
     max_depth: number;
+    out_deps: boolean;
+    out_resolved_deps: boolean;
+    resume_last_run: boolean;
+}
+const defaultOptions: Options = {
+    max_depth: Infinity,
+    out_deps: false,
+    out_resolved_deps: true,
+    resume_last_run: true
 }
 export default class Program {
+    protected depsWriteStream: fs.WriteStream | unknown;
+    protected depsResolvedWriteStream: fs.WriteStream | unknown;
     protected packageJSONData: IPackageJson<any> | undefined;
     protected optionArgs: OptionValues | undefined;
-    protected options: Options = Program.defaultOptions;
-    protected static defaultOptions: Options = { max_depth: Infinity };
+    protected options: Options = defaultOptions;
     public get bin(): string | undefined {
         return Object.keys(this.packageJSONData?.bin as {
             [k: string]: string;
@@ -51,26 +69,58 @@ export default class Program {
         }
     }
     protected async onAction(packageUserSuppliedName: string) {
+        this.parseOptions();
+        if (this.options.resume_last_run) {
+            this.resumeLastRun();
+        }
         const rootPackage: Package | undefined = Package.fromString(packageUserSuppliedName);
         if (rootPackage === undefined) {
             this.exit(ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED, `"${packageUserSuppliedName}" is not a valid package name`);
         }
-        this.parseOptions()
+        if (this.options.out_deps) {
+            this.depsWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.DEPS));
+        }
+        if (this.options.out_resolved_deps) {
+            this.depsResolvedWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.RESOLVED_DEPS), { flags: "a" });
+        }
+
         const dependencies: Dependencies = new Dependencies(rootPackage!);
+        dependencies.on(DependenciesEvents.PACKAGE_DISCOVERED, async (pkg: Package) => {
+            if (this.depsWriteStream) {
+                (<fs.WriteStream>this.depsWriteStream!).write(`${pkg.fullName}${EOL}`);
+            }
+        });
         dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
-            await pkg.download();
+            try {
+                await pkg.download();
+                (<fs.WriteStream>this.depsResolvedWriteStream!).write(`${pkg.fullName}${EOL}`);
+            }
+            catch (error) {
+                // TODO: return human-readable error
+            }
         });
         await dependencies.load(this.options.max_depth);
-        // await dependencies.downloadAll();
+    }
+    resumeLastRun() {
+        try {
+            const resolvedPkgsSeparatedByNewLine = fs.readFileSync(path.resolve(process.cwd(), Files.RESOLVED_DEPS)).toString();
+            const resolvedPkgs: PackageFullName[] = resolvedPkgsSeparatedByNewLine.split(EOL);
+            Package.fillCacheByFullNames(resolvedPkgs);
+        }
+        catch (error) {
+
+        }
     }
     protected parseOptions() {
         Object.entries(program.opts()).forEach((optionArg: [string, any]) => {
             const optionArgName = optionArg[0];
             const optionArgVal = optionArg[1];
-            switch (optionArgName) { 
+            switch (optionArgName) {
                 case OptionNames.MAX_DEPTH:
                     this.options.max_depth = optionArgVal === Infinity.toString() ? Infinity : parseInt(optionArgVal);
                     break;
+                default:
+                    (<any>this.options)[optionArgName] = optionArgVal;
             }
         });
     }
@@ -79,6 +129,9 @@ export default class Program {
     }
     protected setOptions() {
         program.option(`-d, --${OptionNames.MAX_DEPTH} <depth>`, "max depth. | integer bigger than 1", this.options.max_depth.toString())
+        program.option(`--${OptionNames.OUT_DEPS} <out>`, "export dependencies list?", this.options.out_deps)
+        program.option(`--${OptionNames.OUT_RESOLVED_DEPS} <out>`, "export resolved dependencies list?", this.options.out_resolved_deps)
+        program.option(`-re, --${OptionNames.RESUME_LAST_RUN} <resume>`, "resume last run?", this.options.resume_last_run)
     }
     protected setActions() {
         program.action(this.onAction.bind(this));
