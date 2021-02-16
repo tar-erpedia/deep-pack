@@ -1,15 +1,13 @@
-import { exec, execSync } from "child_process";
+import { exec } from "child_process";
 import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import PackageJsonLoader from "npm-package-json-loader";
+import semver from "semver";
 interface APIResponse {
     dependencies: Map<string, string>;
 }
-function removeSemanticsFromVersion(version: string): string {
-    if (version.startsWith("~") || version.startsWith("^")) {
-        return version.slice(1);
-    }
-    return version;
+function extractVersionFromSemanticVersion(semanticVersion: string): string | undefined {
+    return semver.coerce(semanticVersion, { rtl: true })?.version;
 }
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
     return `${name}@${version}`;
@@ -62,8 +60,13 @@ export default class Package {
             if (response.dependencies == undefined) return result; // TODO: add log
             Object.entries(response.dependencies).forEach((pkg: [string, string]) => {
                 const packageName = pkg[0];
-                const packageVersion = pkg[1];
-                const dependency = Package.fromNameAndVersion(packageName, removeSemanticsFromVersion(packageVersion));
+                const packageSemanticVersion = pkg[1];
+                var packageVersion = extractVersionFromSemanticVersion(packageSemanticVersion);
+                if(packageVersion === undefined) {
+                    packageVersion = "latest"; 
+                    // TODO: write log.
+                }
+                const dependency = Package.fromNameAndVersion(packageName, packageVersion);
                 dependency.addDependent(this);
                 result.push(dependency);
             });
