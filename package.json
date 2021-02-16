@@ -37,7 +37,6 @@
     "figlet": "^1.5.0",
     "fs": "0.0.1-security",
     "node-fetch": "^2.6.1",
-    "npm-fetch": "0.0.9",
     "npm-package-arg": "^8.1.0",
     "npm-package-json-loader": "^1.0.43",
     "path": "^0.12.7",
