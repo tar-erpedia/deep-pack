@@ -1,5 +1,5 @@
 # deep-pack
-📦 Pack a package and pack it's dependencies into multiple .tgz files 🗃️
+📦 Pack a package and pack it's dependencies recursively into multiple .tgz files 🗃️
 ## Installation
 `npm i @tar-erpedia/deep-pack -g`
 ## CLI
