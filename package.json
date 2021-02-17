@@ -1,6 +1,6 @@
 {
   "name": "@tar-erpedia/deep-pack",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "pack a package and pack it's dependencies",
   "main": "./lib/deep-pack.js",
   "bin": {
