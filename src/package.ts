@@ -73,6 +73,7 @@ export default class Package {
                     // TODO: write log.
                 }
                 const dependency = Package.fromNameAndVersion(packageName, packageVersion);
+                // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
                 if(this.isAncestorEqual(dependency)) {
                     return;
                 }
