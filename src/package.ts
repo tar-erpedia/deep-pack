@@ -7,6 +7,9 @@ interface APIResponse {
     dependencies: Map<string, string>;
 }
 function extractVersionFromSemanticVersion(semanticVersion: string): string | undefined {
+    if(semanticVersion === "*") {
+        return "latest";
+    }
     return semver.coerce(semanticVersion, { rtl: true })?.version;
 }
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
@@ -26,6 +29,9 @@ export default class Package {
 
     static cache: Map<PackageFullName, Package> = new Map();
     static MAX_TRIES: number = 10;
+    public get isRoot(): boolean {
+        return this.dependents.length === 0;
+    }
     public get fullName(): PackageFullName {
         return fullNameByNameAndVersion(this.name,  this.version);
     }
@@ -67,6 +73,9 @@ export default class Package {
                     // TODO: write log.
                 }
                 const dependency = Package.fromNameAndVersion(packageName, packageVersion);
+                if(this.isAncestorEqual(dependency)) {
+                    return;
+                }
                 dependency.addDependent(this);
                 result.push(dependency);
             });
@@ -85,6 +94,18 @@ export default class Package {
                     return await this.getDependencies(trialCount + 1);
             }
         }
+    }
+    public isAncestorEqual(pkg : Package) : boolean {
+        if(pkg.isEqual(this)) {
+            return true;
+        }
+        if(this.isRoot) {
+            return false;
+        }
+        return this.dependents.some((dependent) => dependent.isAncestorEqual(pkg));
+    }
+    public isEqual(pkg : Package): boolean {
+        return pkg.fullName === this.fullName;
     }
     public toString(): string {
         return this.fullName;
