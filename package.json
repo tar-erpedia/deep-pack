@@ -7,7 +7,7 @@
     "npm-deep-pack": "./bin/deep-pack.js"
   },
   "scripts": {
-    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"read-package-json@1.3.3\"",
+    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"@vue/cli\"",
     "build": "tsc -p .",
     "local": "sudo npm i -g && npm-deep-pack",
     "zpublish": "npm version patch --force && npm publish --access public",

@@ -16,7 +16,7 @@ export default class Dependencies extends EventEmitter {
             if (dependencies === undefined) {
                 return; // TODO: log.
             }
-            if (dependencies!.length == 0 || level === depth) {
+            if (dependencies.every(dep => dep.resolved) || dependencies!.length == 0 || level === depth) {
                 this.resolveRecursive(pkg);
                 return;
             }
@@ -40,7 +40,7 @@ export default class Dependencies extends EventEmitter {
         pkg.resolved = true;
         pkg.loading = false;
         for (const dependent of pkg.dependents) {
-            if(dependent.dependencies.every((dependency) => dependency.resolved)) {
+            if (dependent.dependencies.every((dependency) => dependency.resolved)) {
                 this.resolveRecursive(dependent);
             }
         }
