@@ -1,4 +1,5 @@
 import { exec } from "child_process";
+import { X_OK } from "constants";
 import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import PackageJsonLoader from "npm-package-json-loader";
@@ -8,8 +9,10 @@ interface APIResponse {
 }
 function extractVersionFromSemanticVersion(semanticVersion: string): string | undefined {
     if(semanticVersion === "*") {
-        return "latest";
+        return "latest"; 
     }
+    // TODO: support: ">=1.2.3 <1.2.7"
+    // TODO: support "1.3.0-rc0" => if contains anything after x.y.z like x.y.z-anything then keep it x.y.z-anything
     return semver.coerce(semanticVersion, { rtl: true })?.version;
 }
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
