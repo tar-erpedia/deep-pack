@@ -5,7 +5,6 @@ import figlet, { Options as FigletOptions } from "figlet";
 import path from "path";
 import PackageJsonLoader, { IPackageJson } from "npm-package-json-loader";
 import Package, { PackageFullName } from "./package";
-import { exec } from "child_process";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies";
 import fs from "fs";
 import { EOL } from "os";

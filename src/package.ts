@@ -1,37 +1,15 @@
 import { exec } from "child_process";
-import { X_OK } from "constants";
-import fetch, { Response } from "node-fetch";
+import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
-import PackageJsonLoader from "npm-package-json-loader";
-import { versions } from "process";
 import semver from "semver";
-
+export type PackageFullName = string;
 interface APIResponse {
   dependencies: Map<string, string>;
   versions: { [version: string]: any };
 }
-function extractVersionFromSemanticVersion(
-  semanticVersion: string
-): string | undefined {
-  if (semanticVersion === "*") {
-    return "latest";
-  }
-
-  // TODO: support: ">=1.2.3 <1.2.7"
-  let lastPhrase = semanticVersion.split(" ").pop();
-  if (lastPhrase != undefined && lastPhrase.substr(0, 1) === "<") {
-  }
-
-  // TODO: support "1.3.0-rc0" => if contains anything after x.y.z like x.y.z-anything then keep it x.y.z-anything
-  return semver.coerce(semanticVersion, { rtl: true })?.version;
-}
-function fullNameByNameAndVersion(
-  name: string,
-  version: string
-): PackageFullName {
+function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
   return `${name}@${version}`;
 }
-export type PackageFullName = string;
 enum Errors {
   TOO_MANY_FAILURES = "too many failures",
 }
@@ -72,9 +50,7 @@ export default class Package {
       });
     });
   }
-  async getDependencies(
-    trialCount: number = 0
-  ): Promise<Package[] | undefined> {
+  async getDependencies(trialCount: number = 0): Promise<Package[] | undefined> {
     this.loading = true;
     try {
       const response: APIResponse = <APIResponse>(
@@ -154,6 +130,18 @@ export default class Package {
       this.cache.set(fullName, pkg);
     }
   }
+  static async fromSemanticVersion(name: string, semanticVersion: string): Promise<Package> {
+    let version: string = semanticVersion;
+    if (semanticVersion === "*") {
+      version = "latest";
+    } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
+      const response: APIResponse = <APIResponse>((<unknown>(await (await fetch(`https://registry.npmjs.org/${name}`)).json()))); // `npm view` returns inconsistent format. so i made direct call to registry
+      version = semver.maxSatisfying(Object.keys(response.versions), semanticVersion) ?? "latest";
+    } else {
+      version = semver.coerce(semanticVersion)?.version ?? "latest";
+    }
+    return Promise.resolve(this.fromNameAndVersion(name, version));
+  }
   static fromString(pacakgeNameInAnyFormat: string): Package | undefined {
     try {
       const pacakgeArgResult = npmPackageArg(pacakgeNameInAnyFormat);
@@ -164,28 +152,5 @@ export default class Package {
     } catch (ex) {
       return undefined;
     }
-  }
-  static async fromSemanticVersion(
-    name: string,
-    semanticVersion: string
-  ): Promise<Package> {
-    let version: string = semanticVersion;
-
-    if (semanticVersion === "*") {
-      version = "latest";
-    } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
-      const response: APIResponse = <APIResponse>((<unknown>(await (await fetch(`https://registry.npmjs.org/${name}`)).json()))); // `npm view` returns inconsistent format. so i made direct call to registry
-
-      version =
-        semver.maxSatisfying(Object.keys(response.versions), semanticVersion) ??
-        "latest";
-      console.log(`${name}@${version}=${semanticVersion}`);
-    } else {
-      version =
-        semver.coerce(semanticVersion)?.version ?? "latest";
-    }
-
-    // return
-    return Promise.resolve(this.fromNameAndVersion(name, version));
   }
 }
