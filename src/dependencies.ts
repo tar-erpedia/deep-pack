@@ -1,14 +1,14 @@
-import { exec, ExecException } from "child_process";
 import EventEmitter from "events";
-import Package, { PackageFullName } from "./package";
+import { type } from "os";
+import Package from "./package";
 export enum Events {
     PACKAGE_DISCOVERED = "package_discovered",
     PACKAGE_RESOLVED = "package_resolved",
 }
+export type ResolveAction = (pkg : Package) => Promise<boolean>;
 export default class Dependencies extends EventEmitter {
 
     rootPackage: Package;
-
     async loadRecursive(pkg: Package, level: number, depth: number) {
         console.log(`requested ${pkg}, level: ${level}, depth: ${depth}`);
         try {
@@ -17,7 +17,7 @@ export default class Dependencies extends EventEmitter {
                 return; // TODO: log.
             }
             if (dependencies.every(dep => dep.resolved) || dependencies!.length == 0 || level === depth) {
-                this.resolveRecursive(pkg);
+                await this.resolveRecursive(pkg);
                 return;
             }
             const loadPromises = [];
@@ -34,27 +34,27 @@ export default class Dependencies extends EventEmitter {
 
         }
     }
-    resolveRecursive(pkg: Package) {
+    async resolveRecursive(pkg: Package) {
+        try {
+            await pkg.download();
+        } catch (ex){
+            // TODO: log errors.
+            return;
+        }
         // console.log(`${pkg} resolved`);
         this.emit(Events.PACKAGE_RESOLVED, pkg);
+
         pkg.resolved = true;
         pkg.loading = false;
         for (const dependent of pkg.dependents) {
             if (dependent.dependencies.every((dependency) => dependency.resolved)) {
-                this.resolveRecursive(dependent);
+                await this.resolveRecursive(dependent);
             }
         }
-    }
-    outputResolved(depPkg: Package) {
-
     }
     async load(depth: number) {
         await this.loadRecursive(this.rootPackage, 0, depth);
     }
-
-    // async downloadAll() {
-    //     this.dependencies.forEach((_, pkgName) => { exec(`npm pack ${pkgName}`) });
-    // }
 
     constructor(rootPackage: Package) {
         super();

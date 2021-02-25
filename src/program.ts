@@ -91,7 +91,6 @@ export default class Program {
         });
         dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
             try {
-                await pkg.download();
                 (<fs.WriteStream>this.depsResolvedWriteStream!).write(`${pkg.fullName}${EOL}`);
             }
             catch (error) {

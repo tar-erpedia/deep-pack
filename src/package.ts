@@ -38,12 +38,12 @@ export default class Package {
       this.dependents.push(pkg);
     }
   }
-  public async download() {
+  public async download() : Promise<void> {
     console.log(`downloading ${this}...`);
     return new Promise<void>((resolve, reject) => {
       exec(`npm pack ${this}`, (error, stdout, stderr) => {
         if (error) {
-          reject(); // TODO: return human-readable error
+          reject(error); // TODO: return human-readable error
         } else {
           resolve();
         }
