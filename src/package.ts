@@ -2,6 +2,8 @@ import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
 import { DownloaderHelper } from "node-downloader-helper";
+import fs from "fs";
+import path from "path";
 
 export type PackageFullName = string;
 interface APIResponse {
@@ -32,6 +34,9 @@ export default class Package {
   public get fullName(): PackageFullName {
     return fullNameByNameAndVersion(this.name, this.version);
   }
+  public get tgzFileName() : string {
+    return path.basename(this.tarballURL);
+  }
   protected constructor(name: string, version?: string) {
     this.name = name;
     this.version = version ?? "latest";
@@ -44,16 +49,19 @@ export default class Package {
   public async download(): Promise<void> {
     let triesCount = 0;
     console.log(`downloading ${this}...`);
-    const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // TODO: add shasum check.
+    // const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // TODO: add shasum check.
     let success = false;
-    while (!success && triesCount++ < Package.MAX_TRIES) {
-      try {
-        success = await dl.start();
+    for (success = false, triesCount = 0; triesCount < Package.MAX_TRIES; triesCount++) {
+      try{
+        const response = await fetch(this.tarballURL);
+        const tgzFileData = await response.buffer();
+        fs.writeFileSync(path.resolve(process.cwd(), this.tgzFileName), tgzFileData);
+        success = response.ok;
       } catch (error) {
         // TODO: different errors
       }
     }
-    if (!success) throw "`downloading ${this} failed`"
+    if (!success) throw "`downloading ${this} failed`";
   }
   async getDependencies(trialCount: number = 0): Promise<Package[] | undefined> {
     this.loading = true;
