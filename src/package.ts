@@ -2,9 +2,12 @@ import { exec } from "child_process";
 import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
+import { DownloaderHelper } from "node-downloader-helper";
+
 export type PackageFullName = string;
 interface APIResponse {
   dependencies: Map<string, string>;
+  dist: { shasum: string, tarball: string; }
   versions: { [version: string]: any };
 }
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
@@ -19,6 +22,7 @@ export default class Package {
   public loading: boolean = false;
   public name: string;
   public resolved: boolean = false;
+  public tarballURL: string = "";
   public version: string;
 
   static cache: Map<PackageFullName, Package> = new Map();
@@ -38,17 +42,11 @@ export default class Package {
       this.dependents.push(pkg);
     }
   }
-  public async download() : Promise<void> {
+  public async download(): Promise<void> {
     console.log(`downloading ${this}...`);
-    return new Promise<void>((resolve, reject) => {
-      exec(`npm pack ${this}`, (error, stdout, stderr) => {
-        if (error) {
-          reject(error); // TODO: return human-readable error
-        } else {
-          resolve();
-        }
-      });
-    });
+    const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // tTODO: add shasum check.
+    const success = await dl.start();
+    if (!success) throw "`downloading ${this} failed`"
   }
   async getDependencies(trialCount: number = 0): Promise<Package[] | undefined> {
     this.loading = true;
@@ -64,6 +62,7 @@ export default class Package {
       ); // `npm view` returns inconsistent format. so i made direct call to registry
       const result: Package[] = [];
       if (response === undefined) return;
+      this.tarballURL = response.dist.tarball;
       if (response.dependencies == undefined) return result; // TODO: add log
       const semverPromises = Object.entries(response.dependencies).map(
         async (pkg: [string, string]) => {

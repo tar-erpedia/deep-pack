@@ -36,6 +36,7 @@
     "commander": "^7.0.0",
     "figlet": "^1.5.0",
     "fs": "0.0.1-security",
+    "node-downloader-helper": "^1.0.17",
     "node-fetch": "^2.6.1",
     "npm-package-arg": "^8.1.0",
     "npm-package-json-loader": "^1.0.43",
