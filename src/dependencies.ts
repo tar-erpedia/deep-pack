@@ -1,5 +1,4 @@
 import EventEmitter from "events";
-import { type } from "os";
 import Package from "./package";
 export enum Events {
     PACKAGE_DISCOVERED = "package_discovered",

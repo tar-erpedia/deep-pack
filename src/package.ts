@@ -1,4 +1,3 @@
-import { exec } from "child_process";
 import fetch from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
@@ -43,9 +42,17 @@ export default class Package {
     }
   }
   public async download(): Promise<void> {
+    let triesCount = 0;
     console.log(`downloading ${this}...`);
-    const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // tTODO: add shasum check.
-    const success = await dl.start();
+    const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // TODO: add shasum check.
+    let success = false;
+    while (!success && triesCount++ < Package.MAX_TRIES) {
+      try {
+        success = await dl.start();
+      } catch (error) {
+        // TODO: different errors
+      }
+    }
     if (!success) throw "`downloading ${this} failed`"
   }
   async getDependencies(trialCount: number = 0): Promise<Package[] | undefined> {
