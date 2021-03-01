@@ -1,0 +1,16 @@
+{
+	// This file configures the private extension manager for users of this workspace.
+	// Extension identifier format: ${publisher}.${name}. Example: vscode.csharp
+
+	// List of NPM registries containing private extensions.
+	// Each item should have a "name", a "registry" URL, and optionally a "query" to
+	// filter which extensions are shown.
+	// See https://www.npmjs.com/package/npm-registry-fetch#fetch-opts for extra
+	// options including authentication.
+	"registries": [
+        {"name" : "netapp", "registry": "https://repository.sonatype.org/"}
+	],
+	// List of private extensions which should be recommended for users of this workspace.
+	"recommendations": [
+	]
+}

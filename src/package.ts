@@ -1,170 +1,261 @@
-import fetch from "node-fetch";
+import fetch, { Response } from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
-import { DownloaderHelper } from "node-downloader-helper";
 import fs from "fs";
 import path from "path";
+import { StatusCode } from "status-code-enum";
 
 export type PackageFullName = string;
+export type PackageName = string;
+export type PackageSemanticVersion = string;
+export type PackageVersion = string;
 interface APIResponse {
-  dependencies: Map<string, string>;
-  dist: { shasum: string, tarball: string; }
-  versions: { [version: string]: any };
+    dependencies?: object;
+    dist?: { shasum: string, tarball: string; }
+    versions?: { [version: string]: any };
+}
+interface APIRequest {
+    name: PackageName,
+    version?: PackageVersion
 }
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
-  return `${name}@${version}`;
+    return `${name}@${version}`;
 }
 enum Errors {
-  TOO_MANY_FAILURES = "too many failures",
+    NOT_FOUND = "not found",
+    NO_TARBALL = "no tarball",
+    TOO_MANY_FAILURES = "too many failures",
+    REGISTRY_ERROR = "REGISTRY_ERROR"
 }
 export default class Package {
-  public dependencies: Package[] = [];
-  public dependents: Package[] = [];
-  public loading: boolean = false;
-  public name: string;
-  public resolved: boolean = false;
-  public tarballURL: string = "";
-  public version: string;
+    static readonly MAX_TRIES: number = 10;
 
-  static cache: Map<PackageFullName, Package> = new Map();
-  static MAX_TRIES: number = 10;
-  public get isRoot(): boolean {
-    return this.dependents.length === 0;
-  }
-  public get fullName(): PackageFullName {
-    return fullNameByNameAndVersion(this.name, this.version);
-  }
-  public get tgzFileName() : string {
-    return path.basename(this.tarballURL);
-  }
-  protected constructor(name: string, version?: string) {
-    this.name = name;
-    this.version = version ?? "latest";
-  }
-  addDependent(pkg: Package) {
-    if (!this.dependents.includes(pkg)) {
-      this.dependents.push(pkg);
-    }
-  }
-  public async download(): Promise<void> {
-    let triesCount = 0;
-    console.log(`downloading ${this}...`);
-    // const dl = new DownloaderHelper(this.tarballURL, process.cwd(), { maxRetries: 10, delay: 100 }); // TODO: add shasum check.
-    let success = false;
-    for (success = false, triesCount = 0; triesCount < Package.MAX_TRIES; triesCount++) {
-      try{
-        const response = await fetch(this.tarballURL);
-        const tgzFileData = await response.buffer();
-        fs.writeFileSync(path.resolve(process.cwd(), this.tgzFileName), tgzFileData);
-        success = response.ok;
-      } catch (error) {
-        // TODO: different errors
-      }
-    }
-    if (!success) throw "`downloading ${this} failed`";
-  }
-  async getDependencies(trialCount: number = 0): Promise<Package[] | undefined> {
-    this.loading = true;
-    try {
-      const response: APIResponse = <APIResponse>(
-        (<unknown>(
-          await (
-            await fetch(
-              `https://registry.npmjs.org/${this.name}/${this.version}`
-            )
-          ).json()
-        ))
-      ); // `npm view` returns inconsistent format. so i made direct call to registry
-      const result: Package[] = [];
-      if (response === undefined) return;
-      this.tarballURL = response.dist.tarball;
-      if (response.dependencies == undefined) return result; // TODO: add log
-      const semverPromises = Object.entries(response.dependencies).map(
-        async (pkg: [string, string]) => {
-          const packageName = pkg[0];
-          const packageSemanticVersion = pkg[1];
+    public dependencies: Package[] = [];
+    public dependents: Package[] = [];
+    public error: boolean = false;
+    public loading: boolean = false;
+    public name: string;
+    public resolved: boolean = false;
+    public tarballURL: string | undefined;
+    public version: string;
 
-          const dependency = await Package.fromSemanticVersion(packageName, packageSemanticVersion);
-          // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
-          if (this.isAncestorEqual(dependency)) {
+    static cache: Map<PackageFullName, Package> = new Map();
+    static apiCache: Map<PackageName, APIResponse> = new Map();
+
+    public get isRoot(): boolean {
+        return this.dependents.length === 0;
+    }
+    public get fullName(): PackageFullName {
+        return fullNameByNameAndVersion(this.name, this.version);
+    }
+    public get tgzFileName(): string | undefined {
+        if (!this.tarballURL) {
             return;
-          }
-          dependency.addDependent(this);
-          result.push(dependency);
         }
-      );
-      await Promise.all(semverPromises);
-      this.dependencies = result;
-      return result;
-    } catch (error) {
-      const errno = error?.errno;
-      console.log(errno);
-      switch (errno) {
-        case "ENOTFOUND":
-          return;
-        default:
-          if (trialCount > Package.MAX_TRIES) {
+        return path.basename(this.tarballURL!);
+    }
+    protected constructor(name: string, version?: string) {
+        this.name = name;
+        this.version = version ?? "latest";
+    }
+
+    public addDependent(pkg: Package) {
+        if (!this.dependents.includes(pkg)) {
+            this.dependents.push(pkg);
+        }
+    }
+
+    public async download(): Promise<void> {
+        if (!this.tarballURL || !this.tgzFileName) {
+            throw "not enough data for download tgz file";
+        }
+        console.log(`downloading ${this}...`);
+        let triesCount = 0;
+        let tgzFileData: Buffer;
+        do {
+            try {
+                const response = await fetch(this.tarballURL!);
+                if (!response) continue;
+                tgzFileData = await response.buffer();
+                if (!tgzFileData) continue;
+                break;
+            } catch (error) {
+                // TODO: different errors
+            }
+        } while (++triesCount < Package.MAX_TRIES);
+        if (triesCount == Package.MAX_TRIES) throw "`downloading ${this} failed`";
+        fs.writeFileSync(path.resolve(process.cwd(), this.tgzFileName), tgzFileData!);
+        // TODO: add shasum check.
+    }
+    async getDependencies(): Promise<Package[]> {
+        this.loading = true;
+        const result: Package[] = [];
+        let responseBodyAsJSON: APIResponse;
+        try {
+            responseBodyAsJSON = await Package.apiRequest({ name: this.name, version: this.version });
+        } catch (error) {
+            switch (error) {
+                case Errors.REGISTRY_ERROR:
+                    return result;
+                default:
+                    
+                    this.error = true;
+                    this.loading = false;
+                    throw error;
+            }
+        }
+        this.tarballURL = responseBodyAsJSON!.dist?.tarball;
+        if (responseBodyAsJSON!.dependencies == undefined) { // special case: dependencies node doesn't exist, but tarball exists.
+            return result;
+        }
+
+        for (const pkg of Object.entries(responseBodyAsJSON!.dependencies)) {
+            const packageName = pkg[0];
+            const packageSemanticVersion = pkg[1];
+
+            const dependency = await Package.fromSemanticVersion(packageName, packageSemanticVersion);
+            // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
+            if (this.isAncestorEqual(dependency)) {
+                continue;
+            }
+            dependency.addDependent(this);
+            result.push(dependency);
+        }
+
+        // const semverPromises = Object.entries(responseBodyAsJSON.dependencies).map(
+        //     async (pkg: [string, string]) => {
+        //         const packageName = pkg[0];
+        //         const packageSemanticVersion = pkg[1];
+
+        //         const dependency = await Package.fromSemanticVersion(packageName, packageSemanticVersion);
+        //         // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
+        //         if (this.isAncestorEqual(dependency)) {
+        //             return;
+        //         }
+        //         dependency.addDependent(this);
+        //         result.push(dependency);
+        //     }
+        // );
+        // await Promise.all(semverPromises);
+
+
+        this.dependencies = result;
+        return result;
+    }
+    public isAncestorEqual(pkg: Package): boolean {
+        if (pkg.isEqual(this)) {
+            return true;
+        }
+        if (this.isRoot) {
+            return false;
+        }
+        return this.dependents.some((dependent) => dependent.isAncestorEqual(pkg));
+    }
+    public isEqual(pkg: Package): boolean {
+        return pkg.fullName === this.fullName;
+    }
+    public toString(): string {
+        return this.fullName;
+    }
+
+    public static async apiRequest(apiRequest: APIRequest): Promise<APIResponse> {
+        const cachedResponse = Package.apiCache.get(apiRequest.name);
+        if (cachedResponse) {
+            if (apiRequest.version) {
+                return cachedResponse!.versions![apiRequest.version!];
+            } else {
+                return cachedResponse;
+            }
+        }
+
+        if (!apiRequest.version) {
+            apiRequest.version = "";
+        }
+
+        let apiResponse: APIResponse;
+        let triesCount = 0;
+        do {
+            let response: Response | undefined = undefined;
+            try {
+                response = await fetch(`https://registry.npmjs.org/${apiRequest.name}/${apiRequest.version!}`); // `npm view` returns inconsistent format. so i made direct call to registry
+            } catch (error) {
+                // TODO: Different errors
+            }
+            if (!response) {
+                continue;
+            }
+            if (!response.ok) {
+                switch (response.status) {
+                    case StatusCode.ClientErrorNotFound:
+                        throw Errors.REGISTRY_ERROR;
+                    default:
+                        throw response.statusText;
+                }
+            }
+            try {
+                apiResponse = await <APIResponse>(<unknown>(response.json()));
+                if (!apiResponse) {
+                    continue;
+                }
+                break;
+            } catch (error) {
+                // TODO: Different errors
+            }
+        } while (++triesCount < Package.MAX_TRIES);
+        if (triesCount == Package.MAX_TRIES) {
             throw Errors.TOO_MANY_FAILURES;
-          }
-          return await this.getDependencies(trialCount + 1);
-      }
+        }
+        if (apiRequest.version == "") {
+            Package.apiCache.set(apiRequest.name, apiResponse!);
+        }
+        return apiResponse!;
     }
-  }
-  public isAncestorEqual(pkg: Package): boolean {
-    if (pkg.isEqual(this)) {
-      return true;
+    static fillCacheByFullNames(fullNames: PackageFullName[]) {
+        for (const fullName of fullNames) {
+            const pkg = Package.fromString(fullName);
+            if (pkg === undefined) continue;
+            pkg!.resolved = true;
+            this.cache.set(fullName, pkg);
+        }
     }
-    if (this.isRoot) {
-      return false;
+    public static fromNameAndVersion(name: string, version: string): Package {
+        const fullName = fullNameByNameAndVersion(name, version);
+        const cachedPkg = Package.cache.get(fullName);
+        if (cachedPkg) {
+            return cachedPkg;
+        } else {
+            const result = new Package(name, version);
+            this.cache.set(result.fullName, result);
+            return result;
+        }
     }
-    return this.dependents.some((dependent) => dependent.isAncestorEqual(pkg));
-  }
-  public isEqual(pkg: Package): boolean {
-    return pkg.fullName === this.fullName;
-  }
-  public toString(): string {
-    return this.fullName;
-  }
-  public static fromNameAndVersion(name: string, version: string): Package {
-    const fullName = fullNameByNameAndVersion(name, version);
-    const cachedPkg = Package.cache.get(fullName);
-    if (cachedPkg) {
-      return cachedPkg;
-    } else {
-      const result = new Package(name, version);
-      this.cache.set(result.fullName, result);
-      return result;
+    public static async fromSemanticVersion(name: PackageName, semanticVersion: PackageSemanticVersion): Promise<Package> {
+        let version: string = semanticVersion;
+        if (semanticVersion === "*") {
+            version = "latest";
+        } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
+            let apiResponse: APIResponse;
+            try {
+                apiResponse = await Package.apiRequest({ name: name });
+
+            } catch (error) {
+                throw error;
+            }
+            version = semver.maxSatisfying(Object.keys(apiResponse!.versions!), semanticVersion) ?? "latest";
+        } else {
+            version = semver.coerce(semanticVersion)?.version ?? "latest";
+        }
+        return this.fromNameAndVersion(name, version);
     }
-  }
-  static fillCacheByFullNames(fullNames: PackageFullName[]) {
-    for (const fullName of fullNames) {
-      const pkg = Package.fromString(fullName);
-      if (pkg === undefined) continue;
-      pkg!.resolved = true;
-      this.cache.set(fullName, pkg);
+    static fromString(pacakgeNameInAnyFormat: string): Package | undefined {
+        try {
+            const pacakgeArgResult = npmPackageArg(pacakgeNameInAnyFormat);
+            const packageName: string = pacakgeArgResult.name!;
+            const packageVersion: string | undefined =
+                pacakgeArgResult.fetchSpec ?? "latest";
+            return Package.fromNameAndVersion(packageName, packageVersion);
+        } catch (ex) {
+            return undefined;
+        }
     }
-  }
-  static async fromSemanticVersion(name: string, semanticVersion: string): Promise<Package> {
-    let version: string = semanticVersion;
-    if (semanticVersion === "*") {
-      version = "latest";
-    } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
-      const response: APIResponse = <APIResponse>((<unknown>(await (await fetch(`https://registry.npmjs.org/${name}`)).json()))); // `npm view` returns inconsistent format. so i made direct call to registry
-      version = semver.maxSatisfying(Object.keys(response.versions), semanticVersion) ?? "latest";
-    } else {
-      version = semver.coerce(semanticVersion)?.version ?? "latest";
-    }
-    return Promise.resolve(this.fromNameAndVersion(name, version));
-  }
-  static fromString(pacakgeNameInAnyFormat: string): Package | undefined {
-    try {
-      const pacakgeArgResult = npmPackageArg(pacakgeNameInAnyFormat);
-      const packageName: string = pacakgeArgResult.name!;
-      const packageVersion: string | undefined =
-        pacakgeArgResult.fetchSpec ?? "latest";
-      return Package.fromNameAndVersion(packageName, packageVersion);
-    } catch (ex) {
-      return undefined;
-    }
-  }
 }

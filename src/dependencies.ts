@@ -4,39 +4,38 @@ export enum Events {
     PACKAGE_DISCOVERED = "package_discovered",
     PACKAGE_RESOLVED = "package_resolved",
 }
-export type ResolveAction = (pkg : Package) => Promise<boolean>;
+export type ResolveAction = (pkg: Package) => Promise<boolean>;
 export default class Dependencies extends EventEmitter {
-
     rootPackage: Package;
     async loadRecursive(pkg: Package, level: number, depth: number) {
         console.log(`requested ${pkg}, level: ${level}, depth: ${depth}`);
+        let dependencies: Package[] = [];
         try {
-            const dependencies = await pkg?.getDependencies();
-            if (dependencies === undefined) {
-                return; // TODO: log.
-            }
-            if (dependencies.every(dep => dep.resolved) || dependencies!.length == 0 || level === depth) {
-                await this.resolveRecursive(pkg);
-                return;
-            }
-            const loadPromises = [];
-            for (const depPkg of dependencies) {
-                if (!depPkg.loading && !depPkg.resolved) {
-                    this.emit(Events.PACKAGE_DISCOVERED, depPkg);
-                    const loadPromise = this.loadRecursive(depPkg, level + 1, depth);
-                    loadPromises.push(loadPromise);
-                }
-            }
-            await Promise.all(loadPromises);
-        } catch (err) {
-            throw err;
-
+            dependencies = await pkg?.getDependencies();
         }
+        catch (err) {
+            console.log(err);
+            return;
+        }
+        if (dependencies.every(dep => dep.resolved) || dependencies!.length == 0 || level === depth) {
+            await this.resolveRecursive(pkg);
+            return;
+        }
+        const loadPromises = [];
+        for (const depPkg of dependencies) {
+            if (!depPkg.loading && !depPkg.resolved) {
+                this.emit(Events.PACKAGE_DISCOVERED, depPkg);
+                const loadPromise = this.loadRecursive(depPkg, level + 1, depth);
+                loadPromises.push(loadPromise);
+            }
+        }
+        await Promise.all(loadPromises);
     }
     async resolveRecursive(pkg: Package) {
+        if(pkg.error) return;
         try {
             await pkg.download();
-        } catch (ex){
+        } catch (ex) {
             // TODO: log errors.
             return;
         }
