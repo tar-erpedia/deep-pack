@@ -167,7 +167,7 @@ export default class Program {
             .description(this.description!);
     }
     public exit(code: ExitCodes, error: string) {
-        this.writeToShell(error, {}, chalk.red);
+        this.writeToShell(error, undefined, chalk.red);
         process.exit(code);
     }
 }
