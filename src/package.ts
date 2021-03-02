@@ -186,6 +186,11 @@ export default class Package {
                     throw error;
             }
         }
+        if(!responseBodyAsJSON) {
+            console.log("💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣");
+            console.log(`DOESN'T SUPPOSED TO HAPPEN!!! report a bug!!! tell: ${this.fullName} response is undefined. requested by ${this.dependents[0] ?? "unknown"}`)
+            console.log("💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣");
+        }
         this.tarballURL = responseBodyAsJSON!.dist?.tarball;
         if (responseBodyAsJSON!.dependencies == undefined) { // special case: dependencies node doesn't exist, but tarball exists.
             return result;
