@@ -98,6 +98,9 @@ export default class Program {
             }
         });
         await dependencies.load(this.options.max_depth);
+        if (!rootPackage!.resolved) {
+            this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);  // TODO: support run until finished
+        } 
     }
     resumeLastRun() {
         try {

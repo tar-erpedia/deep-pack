@@ -11,18 +11,53 @@ export type PackageName = string;
 export type PackageSemanticVersion = string;
 export type PackageVersion = string;
 
-interface APIResponse {
-    dependencies?: object;
-    dist?: { shasum: string, tarball: string; }
-    versions?: { [version: string]: any };
+type APIResponse = {
+    author?: string;
+    bugs?: object;
+    config?: object;
+    contributors?: object[];
+    dependencies?: object; // used
+    description?: string;
+    devDependencies?: object;
+    directories?: object;
+    dist?: { shasum: string, tarball: string; }; // used
+    "dist-tags"?: object;
+    jsdelivr?: string;
+    homepage?: string;
+    gitHead?: string;
+    gitHooks?: object;
+    license?: string;
+    "lint-staged"?: object;
+    main?: string;
+    name?: string;
+    module?: string;
+    maintainers?: object[];
+    readme?: string;
+    readmeFilename?: string;
+    repository?: object;
+    scripts?: object;
+    sideEffects?: boolean;
+    time?: object;
+    typings?: string;
+    unpkg?: string;
+    users?: object;
+    version?: string;
+    versions?: { [version: string]: any }; // used
+    _hasShrinkwrap?: false;
+    _id?: string;
+    _nodeVersion?: string;
+    _npmOperationalInternal?: object;
+    _npmUser?: string;
+    _npmVersion?: string;
+    _rev?: string;
 }
 
-interface APIRequest {
+type APIRequest = {
     name: PackageName,
     version?: PackageVersion
 }
 
-export const LATEST : PackageVersion = "latest";
+export const LATEST: PackageVersion = "latest";
 
 enum Errors {
     NO_TARBALL = "no tarball",
@@ -35,14 +70,50 @@ enum Errors {
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
     return `${name}@${version}`;
 }
-
+function compactResponse(apiResponse: APIResponse) {
+    delete apiResponse.author;
+    delete apiResponse.bugs;
+    delete apiResponse.config;
+    delete apiResponse.contributors;
+    delete apiResponse.description;
+    delete apiResponse.devDependencies;
+    delete apiResponse.directories;
+    delete apiResponse["dist-tags"];
+    delete apiResponse.jsdelivr;
+    delete apiResponse.homepage;
+    delete apiResponse.gitHead;
+    delete apiResponse.gitHooks;
+    delete apiResponse.license;
+    delete apiResponse["lint-staged"];
+    delete apiResponse.main;
+    delete apiResponse.name;
+    delete apiResponse.module;
+    delete apiResponse.maintainers;
+    delete apiResponse.readme;
+    delete apiResponse.readmeFilename;
+    delete apiResponse.repository;
+    delete apiResponse.scripts;
+    delete apiResponse.sideEffects;
+    delete apiResponse.time;
+    delete apiResponse.typings;
+    delete apiResponse.unpkg;
+    delete apiResponse.users;
+    delete apiResponse.version;
+    delete apiResponse._hasShrinkwrap;
+    delete apiResponse._id;
+    delete apiResponse._nodeVersion;
+    delete apiResponse._npmOperationalInternal;
+    delete apiResponse._npmUser;
+    delete apiResponse._npmVersion;
+    delete apiResponse._rev;
+}
 export default class Package {
     static readonly MAX_TRIES: number = 3;
 
     public dependencies: Package[] = [];
     public dependents: Package[] = [];
     public error: boolean = false;
-    public existsInRegistry : TriState = TriStates.UNKNOWN;
+    public existsInRegistry: TriState = TriStates.UNKNOWN;
     public loading: boolean = false;
     public name: string;
     public resolved: boolean = false;
@@ -132,7 +203,7 @@ export default class Package {
             dependency.addDependent(this);
             result.push(dependency);
         }
-        
+
         this.dependencies = result;
         return result;
     }
@@ -187,10 +258,10 @@ export default class Package {
                         else {
                             try {
                                 const fullResponse = await Package.apiRequest({ name: apiRequest.name });
-                                if(!fullResponse.versions) {
+                                if (!fullResponse.versions) {
                                     throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
                                 }
-                                if(!Object.keys(fullResponse.versions).includes(apiRequest.version!)) {
+                                if (!Object.keys(fullResponse.versions).includes(apiRequest.version!)) {
                                     throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
                                 }
                             } catch (error) {
@@ -212,6 +283,7 @@ export default class Package {
                 if (!apiResponse) {
                     continue;
                 }
+                compactResponse(apiResponse!);
                 break;
             } catch (error) {
                 // TODO: Different errors
@@ -248,7 +320,7 @@ export default class Package {
         let version: string = semanticVersion;
         if (semanticVersion === "*") {
             version = LATEST;
-        } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
+        } else if (semanticVersion.includes("^") || semanticVersion.includes("<") || semanticVersion.includes("-")) {
             let apiResponse: APIResponse;
             try {
                 apiResponse = await Package.apiRequest({ name: name });
