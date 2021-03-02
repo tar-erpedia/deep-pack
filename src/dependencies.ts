@@ -1,5 +1,6 @@
 import EventEmitter from "events";
 import Package from "./package";
+import { TriStates } from "./tristate";
 export enum Events {
     PACKAGE_DISCOVERED = "package_discovered",
     PACKAGE_RESOLVED = "package_resolved",
@@ -33,13 +34,15 @@ export default class Dependencies extends EventEmitter {
     }
     async resolveRecursive(pkg: Package) {
         if(pkg.error) return;
-        try {
-            await pkg.download();
-        } catch (ex) {
-            // TODO: log errors.
-            return;
+        if(pkg.existsInRegistry || pkg.existsInRegistry === TriStates.UNKNOWN) { // TODO: make sure existance determined before reaching this line
+            try {
+                await pkg.download();
+            } catch (ex) {
+                // TODO: log errors.
+                return;
+            }
         }
-        // console.log(`${pkg} resolved`);
+        console.log(`${pkg} resolved`);
         this.emit(Events.PACKAGE_RESOLVED, pkg);
 
         pkg.resolved = true;

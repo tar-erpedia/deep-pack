@@ -4,35 +4,46 @@ import semver from "semver";
 import fs from "fs";
 import path from "path";
 import { StatusCode } from "status-code-enum";
+import { TriState, TriStates } from "./tristate";
 
 export type PackageFullName = string;
 export type PackageName = string;
 export type PackageSemanticVersion = string;
 export type PackageVersion = string;
+
 interface APIResponse {
     dependencies?: object;
     dist?: { shasum: string, tarball: string; }
     versions?: { [version: string]: any };
 }
+
 interface APIRequest {
     name: PackageName,
     version?: PackageVersion
 }
+
+export const LATEST : PackageVersion = "latest";
+
+enum Errors {
+    NO_TARBALL = "no tarball",
+    NOT_FOUND = "not found",
+    PACKAGE_DOESNT_EXIST_IN_REGISTRY = "package doesn't exist in registry",
+    REGISTRY_ERROR = "registry error",
+    TOO_MANY_FAILURES = "too many failures",
+}
+
+
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
     return `${name}@${version}`;
 }
-enum Errors {
-    NOT_FOUND = "not found",
-    NO_TARBALL = "no tarball",
-    TOO_MANY_FAILURES = "too many failures",
-    REGISTRY_ERROR = "REGISTRY_ERROR"
-}
+
 export default class Package {
     static readonly MAX_TRIES: number = 10;
 
     public dependencies: Package[] = [];
     public dependents: Package[] = [];
     public error: boolean = false;
+    public existsInRegistry : TriState = TriStates.UNKNOWN;
     public loading: boolean = false;
     public name: string;
     public resolved: boolean = false;
@@ -56,7 +67,7 @@ export default class Package {
     }
     protected constructor(name: string, version?: string) {
         this.name = name;
-        this.version = version ?? "latest";
+        this.version = version ?? LATEST;
     }
 
     public addDependent(pkg: Package) {
@@ -95,10 +106,11 @@ export default class Package {
             responseBodyAsJSON = await Package.apiRequest({ name: this.name, version: this.version });
         } catch (error) {
             switch (error) {
-                case Errors.REGISTRY_ERROR:
+                case Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY:
+                    this.existsInRegistry = false;
+                    console.log(`pacakge ${this} doesn't exist`);
                     return result;
                 default:
-                    
                     this.error = true;
                     this.loading = false;
                     throw error;
@@ -187,7 +199,28 @@ export default class Package {
             if (!response.ok) {
                 switch (response.status) {
                     case StatusCode.ClientErrorNotFound:
-                        throw Errors.REGISTRY_ERROR;
+                        if (apiRequest.version === "" || apiRequest.version === LATEST) {
+                            throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
+                        }
+                        else {
+                            try {
+                                const fullResponse = await Package.apiRequest({ name: apiRequest.name });
+                                if(!fullResponse.versions) {
+                                    throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
+                                }
+                                if(!Object.keys(fullResponse.versions).includes(apiRequest.version!)) {
+                                    throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
+                                }
+                            } catch (error) {
+                                switch (error) {
+                                    case Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY:
+                                        throw error;
+                                    default:
+                                        continue;
+                                }
+                            }
+
+                        }
                     default:
                         throw response.statusText;
                 }
@@ -232,7 +265,7 @@ export default class Package {
     public static async fromSemanticVersion(name: PackageName, semanticVersion: PackageSemanticVersion): Promise<Package> {
         let version: string = semanticVersion;
         if (semanticVersion === "*") {
-            version = "latest";
+            version = LATEST;
         } else if (semanticVersion.includes("<") || semanticVersion.includes("-")) {
             let apiResponse: APIResponse;
             try {
@@ -241,9 +274,9 @@ export default class Package {
             } catch (error) {
                 throw error;
             }
-            version = semver.maxSatisfying(Object.keys(apiResponse!.versions!), semanticVersion) ?? "latest";
+            version = semver.maxSatisfying(Object.keys(apiResponse!.versions!), semanticVersion) ?? LATEST;
         } else {
-            version = semver.coerce(semanticVersion)?.version ?? "latest";
+            version = semver.coerce(semanticVersion)?.version ?? LATEST;
         }
         return this.fromNameAndVersion(name, version);
     }
@@ -252,7 +285,7 @@ export default class Package {
             const pacakgeArgResult = npmPackageArg(pacakgeNameInAnyFormat);
             const packageName: string = pacakgeArgResult.name!;
             const packageVersion: string | undefined =
-                pacakgeArgResult.fetchSpec ?? "latest";
+                pacakgeArgResult.fetchSpec ?? LATEST;
             return Package.fromNameAndVersion(packageName, packageVersion);
         } catch (ex) {
             return undefined;
