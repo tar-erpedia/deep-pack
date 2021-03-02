@@ -32,7 +32,6 @@ enum Errors {
     TOO_MANY_FAILURES = "too many failures",
 }
 
-
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
     return `${name}@${version}`;
 }
