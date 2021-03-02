@@ -15,6 +15,7 @@ export default class Dependencies extends EventEmitter {
             dependencies = await pkg?.getDependencies();
         }
         catch (err) {
+            pkg.error = true;
             console.log(err);
             return;
         }

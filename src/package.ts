@@ -38,7 +38,7 @@ function fullNameByNameAndVersion(name: string, version: string): PackageFullNam
 }
 
 export default class Package {
-    static readonly MAX_TRIES: number = 10;
+    static readonly MAX_TRIES: number = 3;
 
     public dependencies: Package[] = [];
     public dependents: Package[] = [];
@@ -133,24 +133,7 @@ export default class Package {
             dependency.addDependent(this);
             result.push(dependency);
         }
-
-        // const semverPromises = Object.entries(responseBodyAsJSON.dependencies).map(
-        //     async (pkg: [string, string]) => {
-        //         const packageName = pkg[0];
-        //         const packageSemanticVersion = pkg[1];
-
-        //         const dependency = await Package.fromSemanticVersion(packageName, packageSemanticVersion);
-        //         // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
-        //         if (this.isAncestorEqual(dependency)) {
-        //             return;
-        //         }
-        //         dependency.addDependent(this);
-        //         result.push(dependency);
-        //     }
-        // );
-        // await Promise.all(semverPromises);
-
-
+        
         this.dependencies = result;
         return result;
     }
