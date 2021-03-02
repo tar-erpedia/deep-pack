@@ -283,11 +283,11 @@ export default class Package {
                 if (!apiResponse) {
                     continue;
                 }
-                compactResponse(apiResponse!);
                 break;
             } catch (error) {
                 // TODO: Different errors
             }
+            compactResponse(apiResponse!);
         } while (++triesCount < Package.MAX_TRIES);
         if (triesCount == Package.MAX_TRIES) {
             throw Errors.TOO_MANY_FAILURES;
@@ -320,7 +320,14 @@ export default class Package {
         let version: string = semanticVersion;
         if (semanticVersion === "*") {
             version = LATEST;
-        } else if (semanticVersion.includes("^") || semanticVersion.includes("<") || semanticVersion.includes("-")) {
+        } else if (semanticVersion.includes("^") ||
+            semanticVersion.includes("~") ||
+            semanticVersion.includes(">") ||
+            semanticVersion.includes("<") ||
+            semanticVersion.includes("-") ||
+            semanticVersion.includes("||") ||
+            semanticVersion.includes("=v") ||
+            semanticVersion.includes(".x")) {
             let apiResponse: APIResponse;
             try {
                 apiResponse = await Package.apiRequest({ name: name });
