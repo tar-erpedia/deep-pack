@@ -24,8 +24,8 @@ enum Errors {
     NO_TARBALL = "no tarball",
     NOT_FOUND = "not found",
     PACKAGE_DOESNT_EXIST_IN_REGISTRY = "package doesn't exist in registry",
-    REGISTRY_ERROR = "registry error",
     TOO_MANY_FAILURES = "too many failures",
+    UNKNOWN_ERROR = "unknown error"
 }
 
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
@@ -123,10 +123,10 @@ export default class Package {
                     throw error;
             }
         }
-        if(!responseBodyAsJSON) {
-            console.log("💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣");
-            console.log(`DOESN'T SUPPOSED TO HAPPEN!!! report a bug!!! tell: ${this.fullName} response is undefined. requested by ${this.dependents[0] ?? "unknown"}`)
-            console.log("💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣💣");
+        if(!responseBodyAsJSON) { // shouldn't happen. no idea what can cause it.
+            this.error = true;
+            this.loading = false;
+            throw Errors.UNKNOWN_ERROR;
         }
         this.tarballURL = responseBodyAsJSON!.dist?.tarball;
         if (responseBodyAsJSON!.dependencies == undefined) { // special case: dependencies node doesn't exist, but tarball exists.
