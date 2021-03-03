@@ -1,13 +1,13 @@
 {
   "name": "@tar-erpedia/deep-pack",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "pack a package and pack it's dependencies",
   "main": "./lib/deep-pack.js",
   "bin": {
     "npm-deep-pack": "./bin/deep-pack.js"
   },
   "scripts": {
-    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"@types/webpack-dev-server@3.11.1\"",
+    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"@vue/cli-service\"",
     "build": "tsc -p .",
     "local": "sudo npm i -g && npm-deep-pack",
     "zpublish": "npm version patch --force && npm publish --access public",
