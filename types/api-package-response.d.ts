@@ -4,7 +4,7 @@ type APIPackageResponse = {
     contributors?: object[];
     description?: string;
     directories?: object;
-    "dist-tags"?: object;
+    "dist-tags"?: { latest? : string }; // used
     homepage?: string;
     keywords?: string[];
     license?: string;

@@ -4,7 +4,7 @@ import { program, parseOptions, OptionValues, ParseOptionsResult } from "command
 import figlet, { Options as FigletOptions } from "figlet";
 import path from "path";
 import PackageJsonLoader, { IPackageJson } from "npm-package-json-loader";
-import Package, { PackageFullName } from "./package";
+import Package from "./package";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies";
 import fs from "fs";
 import { EOL } from "os";
@@ -92,11 +92,19 @@ export default class Program {
         dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
             try {
                 (<fs.WriteStream>this.depsResolvedWriteStream!).write(`${pkg.fullName}${EOL}`);
+                this.writeToShell(`${pkg} resolved`, undefined, chalk.green);
             }
             catch (error) {
                 // TODO: return human-readable error
             }
         });
+        dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, async (pkg: Package) => {
+            this.writeToShell(`${pkg} resolve error`, undefined, chalk.red);
+        });
+        dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, async (pkg: Package) => {
+            this.writeToShell(`${pkg} download error`, undefined, chalk.red);
+        });
+
         await dependencies.load(this.options.max_depth);
         if (!rootPackage!.resolved) {
             this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing

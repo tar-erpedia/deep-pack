@@ -4,6 +4,8 @@ import { TriStates } from "./tristate";
 export enum Events {
     PACKAGE_DISCOVERED = "package_discovered",
     PACKAGE_RESOLVED = "package_resolved",
+    PACKAGE_DOWNLOAD_ERROR = "package_download_error",
+    PACKAGE_RESOLVE_ERROR = "package_resolve_error"
 }
 export type ResolveAction = (pkg: Package) => Promise<boolean>;
 export default class Dependencies extends EventEmitter {
@@ -16,7 +18,7 @@ export default class Dependencies extends EventEmitter {
         }
         catch (err) {
             pkg.error = true;
-            console.log(err);
+            this.emit(Events.PACKAGE_RESOLVE_ERROR, pkg);
             return;
         }
         if (dependencies.every(dep => dep.resolved) || dependencies!.length == 0 || level === depth) {
@@ -39,11 +41,10 @@ export default class Dependencies extends EventEmitter {
             try {
                 await pkg.download();
             } catch (ex) {
-                // TODO: log errors.
+                this.emit(Events.PACKAGE_DOWNLOAD_ERROR, pkg);
                 return;
             }
         }
-        console.log(`${pkg} resolved`);
         this.emit(Events.PACKAGE_RESOLVED, pkg);
 
         pkg.resolved = true;

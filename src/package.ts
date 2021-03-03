@@ -1,4 +1,5 @@
 /// <reference path="../types/api-response.d.ts" />
+/// <reference path="../types/package.d.ts" />
 import fetch, { Response } from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
@@ -6,12 +7,7 @@ import fs from "fs";
 import path from "path";
 import { StatusCode } from "status-code-enum";
 import { TriState, TriStates } from "./tristate";
-
-export type PackageFullName = string;
-export type PackageName = string;
-export type PackageSemanticVersion = string;
-export type PackageVersion = string;
-
+import latestSemver from "latest-semver";
 
 type APIRequest = {
     name: PackageName,
@@ -25,7 +21,8 @@ enum Errors {
     NOT_FOUND = "not found",
     PACKAGE_DOESNT_EXIST_IN_REGISTRY = "package doesn't exist in registry",
     TOO_MANY_FAILURES = "too many failures",
-    UNKNOWN_ERROR = "unknown error"
+    UNKNOWN_ERROR = "unknown error",
+    VERSION_DOESNT_EXIST_IN_REGISTRY = "version doesn't exist in registry"
 }
 
 function fullNameByNameAndVersion(name: string, version: string): PackageFullName {
@@ -35,10 +32,11 @@ function compactResponse(apiResponse: APIResponse) {
     Object.getOwnPropertyNames(apiResponse).forEach(key => {
         // ---- for maintaing static referencing: -----
         (<APIPackageResponse>apiResponse).versions;
+        (<APIPackageResponse>apiResponse)["dist-tags"];
         (<APIVersionResponse>apiResponse).dist;
         (<APIVersionResponse>apiResponse).dependencies;
         // --------------------------------------------
-        if(key === "versions" || key === "dist" || key === "dependencies" ) {
+        if(key === "versions" || key === "dist" || key === "dependencies" || key === "dist-tags") {
             return;
         }
         delete (<{ [key: string] : any }>apiResponse)[key];
@@ -87,7 +85,7 @@ export default class Package {
         if (!this.tarballURL || !this.tgzFileName) {
             throw "not enough data for download tgz file";
         }
-        console.log(`downloading ${this}...`);
+        // console.log(`downloading ${this}...`);
         let triesCount = 0;
         let tgzFileData: Buffer;
         do {
@@ -117,13 +115,17 @@ export default class Package {
                     this.existsInRegistry = false;
                     console.log(`pacakge ${this} doesn't exist`);
                     return result;
+                case Errors.VERSION_DOESNT_EXIST_IN_REGISTRY:
+                    this.existsInRegistry = false;
+                    console.log(`version ${this.version} of package ${this.name} doesn't exist`);
+                    return result;
                 default:
                     this.error = true;
                     this.loading = false;
                     throw error;
             }
         }
-        if(!responseBodyAsJSON) { // shouldn't happen. no idea what can cause it.
+        if(!responseBodyAsJSON) { // just in case. shouldn't happen.
             this.error = true;
             this.loading = false;
             throw Errors.UNKNOWN_ERROR;
@@ -168,11 +170,39 @@ export default class Package {
     public static async apiRequest(apiRequest: APIRequest): Promise<APIResponse> {
         const cachedResponse = Package.apiCache.get(apiRequest.name);
         if (cachedResponse) {
-            if (apiRequest.version) {
-                return cachedResponse!.versions![apiRequest.version!];
-            } else {
+            // ----- package requested, not specific version -----
+            if(!apiRequest.version) {
                 return cachedResponse;
             }
+            // ---------------------------------------------------
+            // ----------- specific version requested ------------
+            if(!(<APIPackageResponse> cachedResponse ).versions) {
+                throw Errors.VERSION_DOESNT_EXIST_IN_REGISTRY;
+            }
+            if (apiRequest.version === LATEST) {
+                //  --------------------------------- calculate last version by dist tag ----------------------------------
+                const latestVersionNameByDistTag = (<APIPackageResponse> cachedResponse )["dist-tags"]?.latest;
+                let latestVersionByDistTag : APIVersionResponse | undefined;
+                if(latestVersionNameByDistTag) {
+                    latestVersionByDistTag = (<APIPackageResponse> cachedResponse ).versions![latestVersionNameByDistTag!];
+                } 
+                // --------------------------------------------------------------------------------------------------------
+                if(latestVersionByDistTag) { // calculation by last version by dist tag succeeded
+                    return latestVersionByDistTag;
+                } else { // calculation by last version by dist tag failed
+                    //  ---------------------------------- calculate last version by semver -----------------------------------
+                    const latestVersionBySemver = latestSemver(Object.keys((<APIPackageResponse> cachedResponse ).versions!))!;
+                    return (<APIPackageResponse> cachedResponse ).versions![latestVersionBySemver];
+                    // --------------------------------------------------------------------------------------------------------
+                }
+            } else {
+                const versionResponse = (<APIPackageResponse> cachedResponse ).versions![apiRequest.version!];
+                if(!versionResponse) {
+                    throw Errors.VERSION_DOESNT_EXIST_IN_REGISTRY;
+                }
+                return versionResponse;
+            }
+            // ---------------------------------------------------
         }
 
         if (!apiRequest.version) {
