@@ -11,7 +11,10 @@
     "forceConsistentCasingInFileNames": true,  /* Disallow inconsistently-cased references to the same file. */
     "moduleResolution": "Node",
     "sourceRoot": "./src",
-    "sourceMap": true
+    "sourceMap": true,
+    "typeRoots": [
+      "./types"
+    ]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules"]

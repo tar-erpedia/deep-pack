@@ -1,3 +1,4 @@
+/// <reference path="../types/api-response.d.ts" />
 import fetch, { Response } from "node-fetch";
 import npmPackageArg from "npm-package-arg";
 import semver from "semver";
@@ -11,46 +12,6 @@ export type PackageName = string;
 export type PackageSemanticVersion = string;
 export type PackageVersion = string;
 
-type APIResponse = {
-    author?: string;
-    bugs?: object;
-    config?: object;
-    contributors?: object[];
-    dependencies?: object; // used
-    description?: string;
-    devDependencies?: object;
-    directories?: object;
-    dist?: { shasum: string, tarball: string; }; // used
-    "dist-tags"?: object;
-    jsdelivr?: string;
-    homepage?: string;
-    gitHead?: string;
-    gitHooks?: object;
-    license?: string;
-    "lint-staged"?: object;
-    main?: string;
-    name?: string;
-    module?: string;
-    maintainers?: object[];
-    readme?: string;
-    readmeFilename?: string;
-    repository?: object;
-    scripts?: object;
-    sideEffects?: boolean;
-    time?: object;
-    typings?: string;
-    unpkg?: string;
-    users?: object;
-    version?: string;
-    versions?: { [version: string]: any }; // used
-    _hasShrinkwrap?: false;
-    _id?: string;
-    _nodeVersion?: string;
-    _npmOperationalInternal?: object;
-    _npmUser?: string;
-    _npmVersion?: string;
-    _rev?: string;
-}
 
 type APIRequest = {
     name: PackageName,
@@ -71,41 +32,17 @@ function fullNameByNameAndVersion(name: string, version: string): PackageFullNam
     return `${name}@${version}`;
 }
 function compactResponse(apiResponse: APIResponse) {
-    delete apiResponse.author;
-    delete apiResponse.bugs;
-    delete apiResponse.config;
-    delete apiResponse.contributors;
-    delete apiResponse.description;
-    delete apiResponse.devDependencies;
-    delete apiResponse.directories;
-    delete apiResponse["dist-tags"];
-    delete apiResponse.jsdelivr;
-    delete apiResponse.homepage;
-    delete apiResponse.gitHead;
-    delete apiResponse.gitHooks;
-    delete apiResponse.license;
-    delete apiResponse["lint-staged"];
-    delete apiResponse.main;
-    delete apiResponse.name;
-    delete apiResponse.module;
-    delete apiResponse.maintainers;
-    delete apiResponse.readme;
-    delete apiResponse.readmeFilename;
-    delete apiResponse.repository;
-    delete apiResponse.scripts;
-    delete apiResponse.sideEffects;
-    delete apiResponse.time;
-    delete apiResponse.typings;
-    delete apiResponse.unpkg;
-    delete apiResponse.users;
-    delete apiResponse.version;
-    delete apiResponse._hasShrinkwrap;
-    delete apiResponse._id;
-    delete apiResponse._nodeVersion;
-    delete apiResponse._npmOperationalInternal;
-    delete apiResponse._npmUser;
-    delete apiResponse._npmVersion;
-    delete apiResponse._rev;
+    Object.getOwnPropertyNames(apiResponse).forEach(key => {
+        // ---- for maintaing static referencing: -----
+        (<APIPackageResponse>apiResponse).versions;
+        (<APIVersionResponse>apiResponse).dist;
+        (<APIVersionResponse>apiResponse).dependencies;
+        // --------------------------------------------
+        if(key === "versions" || key === "dist" || key === "dependencies" ) {
+            return;
+        }
+        delete (<{ [key: string] : any }>apiResponse)[key];
+    });
 }
 export default class Package {
     static readonly MAX_TRIES: number = 3;
@@ -121,7 +58,7 @@ export default class Package {
     public version: string;
 
     static cache: Map<PackageFullName, Package> = new Map();
-    static apiCache: Map<PackageName, APIResponse> = new Map();
+    static apiCache: Map<PackageName, APIPackageResponse> = new Map();
 
     public get isRoot(): boolean {
         return this.dependents.length === 0;
@@ -171,9 +108,9 @@ export default class Package {
     async getDependencies(): Promise<Package[]> {
         this.loading = true;
         const result: Package[] = [];
-        let responseBodyAsJSON: APIResponse;
+        let responseBodyAsJSON: APIVersionResponse;
         try {
-            responseBodyAsJSON = await Package.apiRequest({ name: this.name, version: this.version });
+            responseBodyAsJSON = <APIVersionResponse> await Package.apiRequest({ name: this.name, version: this.version });
         } catch (error) {
             switch (error) {
                 case Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY:
@@ -262,7 +199,7 @@ export default class Package {
                         }
                         else {
                             try {
-                                const fullResponse = await Package.apiRequest({ name: apiRequest.name });
+                                const fullResponse = <APIPackageResponse> await Package.apiRequest({ name: apiRequest.name });
                                 if (!fullResponse.versions) {
                                     throw Errors.PACKAGE_DOESNT_EXIST_IN_REGISTRY;
                                 }
@@ -288,11 +225,12 @@ export default class Package {
                 if (!apiResponse) {
                     continue;
                 }
-                break;
             } catch (error) {
+                continue;
                 // TODO: Different errors
             }
             compactResponse(apiResponse!);
+            break;
         } while (++triesCount < Package.MAX_TRIES);
         if (triesCount == Package.MAX_TRIES) {
             throw Errors.TOO_MANY_FAILURES;
@@ -335,7 +273,7 @@ export default class Package {
             semanticVersion.includes(".x")) {
             let apiResponse: APIResponse;
             try {
-                apiResponse = await Package.apiRequest({ name: name });
+                apiResponse = <APIPackageResponse> await Package.apiRequest({ name: name });
 
             } catch (error) {
                 throw error;
