@@ -99,10 +99,16 @@ export default class Program {
             }
         });
         dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, async (pkg: Package) => {
-            this.writeToShell(`${pkg} resolve error`, undefined, chalk.red);
+            // ------------------- UI -------------------
+            const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
+            this.writeToShell(`${pkg} resolve error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
+            // ------------------- UI -------------------
         });
         dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, async (pkg: Package) => {
-            this.writeToShell(`${pkg} download error`, undefined, chalk.red);
+            // ------------------- UI -------------------
+            const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
+            this.writeToShell(`${pkg} download error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
+            // ------------------- UI -------------------
         });
 
         await dependencies.load(this.options.max_depth);

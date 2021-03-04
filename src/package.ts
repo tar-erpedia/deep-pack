@@ -81,6 +81,16 @@ export default class Package {
         }
     }
 
+    public dependentOrDependentsToString() : string {
+        switch (this.dependents.length) {
+            case 0:
+                return "";
+            case 1:
+                return this.dependents[0].toString();
+            default:
+                return `[${this.dependents.join(",")}]`;
+        }
+    }
     public async download(): Promise<void> {
         if (!this.tarballURL || !this.tgzFileName) {
             throw "not enough data for download tgz file";

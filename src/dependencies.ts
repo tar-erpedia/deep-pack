@@ -11,7 +11,10 @@ export type ResolveAction = (pkg: Package) => Promise<boolean>;
 export default class Dependencies extends EventEmitter {
     rootPackage: Package;
     async loadRecursive(pkg: Package, level: number, depth: number) {
-        console.log(`requested ${pkg}, level: ${level}, depth: ${depth}`);
+        // ------------------- UI -------------------
+        const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
+        console.log(`requested ${pkg} by ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`);
+        // ------------------------------------------
         let dependencies: Package[] = [];
         try {
             dependencies = await pkg?.getDependencies();
