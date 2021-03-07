@@ -1,13 +1,13 @@
 {
   "name": "@tar-erpedia/deep-pack",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "pack a package and pack it's dependencies",
   "main": "./lib/deep-pack.js",
   "bin": {
     "npm-deep-pack": "./bin/deep-pack.js"
   },
   "scripts": {
-    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"@vue/cli-service\"",
+    "debug-test": "cd ./debug && nodemon ../src/deep-pack.ts \"@vue/cli-plugin-typescript\"",
     "build": "tsc -p .",
     "local": "sudo npm i -g && npm-deep-pack",
     "zpublish": "npm version patch --force && npm publish --access public",
@@ -36,6 +36,7 @@
     "commander": "^7.0.0",
     "figlet": "^1.5.0",
     "fs": "0.0.1-security",
+    "latest-semver": "^3.0.0",
     "node-fetch": "^2.6.1",
     "npm-package-arg": "^8.1.0",
     "npm-package-json-loader": "^1.0.43",
