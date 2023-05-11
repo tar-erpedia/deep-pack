@@ -21,18 +21,21 @@ enum Files {
 }
 enum OptionNames {
     MAX_DEPTH = "max_depth",
+    DEV_DEPS = "dev",
     OUT_DEPS = "out_deps",
     OUT_RESOLVED_DEPS = "out_resolved_deps",
     RESUME_LAST_RUN = "resume_last_run",
 }
 interface Options {
     max_depth: number;
+    dev_deps: boolean;
     out_deps: boolean;
     out_resolved_deps: boolean;
     resume_last_run: boolean;
 }
 const defaultOptions: Options = {
     max_depth: Infinity,
+    dev_deps: false,
     out_deps: false,
     out_resolved_deps: true,
     resume_last_run: true
@@ -111,7 +114,7 @@ export default class Program {
             // ------------------- UI -------------------
         });
 
-        await dependencies.load(this.options.max_depth);
+        await dependencies.load(this.options.max_depth, this.options.dev_deps);
         if (!rootPackage!.resolved) {
             this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing
             this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);  // TODO: support run until finished
@@ -136,6 +139,9 @@ export default class Program {
                 case OptionNames.MAX_DEPTH:
                     this.options.max_depth = optionArgVal === Infinity.toString() ? Infinity : parseInt(optionArgVal);
                     break;
+                case OptionNames.DEV_DEPS:
+                    this.options.dev_deps = true;
+                    break;
                 default:
                     (<any>this.options)[optionArgName] = optionArgVal;
             }
@@ -146,6 +152,7 @@ export default class Program {
     }
     protected setOptions() {
         program.option(`-d, --${OptionNames.MAX_DEPTH} <depth>`, "max depth. | integer bigger than 1", this.options.max_depth.toString())
+        program.option(`--${OptionNames.DEV_DEPS}`, "resolve devDependencies", this.options.dev_deps.toString())
         program.option(`--${OptionNames.OUT_DEPS} <out>`, "export dependencies list?", this.options.out_deps)
         program.option(`--${OptionNames.OUT_RESOLVED_DEPS} <out>`, "export resolved dependencies list?", this.options.out_resolved_deps)
         program.option(`-re, --${OptionNames.RESUME_LAST_RUN} <resume>`, "resume last run?", this.options.resume_last_run)

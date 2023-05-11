@@ -35,8 +35,9 @@ function compactResponse(apiResponse: APIResponse) {
         (<APIPackageResponse>apiResponse)["dist-tags"];
         (<APIVersionResponse>apiResponse).dist;
         (<APIVersionResponse>apiResponse).dependencies;
+        (<APIVersionResponse>apiResponse).devDependencies;
         // --------------------------------------------
-        if(key === "versions" || key === "dist" || key === "dependencies" || key === "dist-tags") {
+        if(key === "versions" || key === "dist" || key === "dependencies" || key === "devDependencies" || key === "dist-tags") {
             return;
         }
         delete (<{ [key: string] : any }>apiResponse)[key];
@@ -113,7 +114,7 @@ export default class Package {
         fs.writeFileSync(path.resolve(process.cwd(), this.tgzFileName), tgzFileData!);
         // TODO: add shasum check.
     }
-    async getDependencies(): Promise<Package[]> {
+    async getDependencies(includeDevDependencies: boolean): Promise<Package[]> {
         this.loading = true;
         const result: Package[] = [];
         let responseBodyAsJSON: APIVersionResponse;
@@ -145,7 +146,13 @@ export default class Package {
             return result;
         }
 
-        for (const pkg of Object.entries(responseBodyAsJSON!.dependencies)) {
+        const selectedDependencies = Object.entries(responseBodyAsJSON!.dependencies);
+
+        if (includeDevDependencies && responseBodyAsJSON!.devDependencies != undefined) {
+            selectedDependencies.push(...Object.entries(responseBodyAsJSON!.devDependencies));
+        }
+
+        for (const pkg of selectedDependencies) {
             const packageName = pkg[0];
             const packageSemanticVersion = pkg[1];
 
