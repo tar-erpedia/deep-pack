@@ -3,7 +3,8 @@ import clear from "clear";
 import { program, parseOptions, OptionValues, ParseOptionsResult } from "commander";
 import figlet, { Options as FigletOptions } from "figlet";
 import path from "path";
-import PackageJsonLoader, { IPackageJson } from "npm-package-json-loader";
+import PackageJsonLoader from "npm-package-json-loader";
+import { IPackageJson } from '@ts-type/package-dts';
 import Package from "./package";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies";
 import fs from "fs";
@@ -183,7 +184,7 @@ export default class Program {
             chalkFunc = chalk.white;
         }
 
-        if (options !== undefined || options === {}) {
+        if (options !== undefined || Object.keys(options).length === 0) {
             text = figlet.textSync(text, options!);
         }
         console.log(chalkFunc!(text));
