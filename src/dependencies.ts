@@ -10,14 +10,14 @@ export enum Events {
 export type ResolveAction = (pkg: Package) => Promise<boolean>;
 export default class Dependencies extends EventEmitter {
     rootPackage: Package;
-    async loadRecursive(pkg: Package, level: number, depth: number) {
+    async loadRecursive(pkg: Package, level: number, depth: number, loadDevDependencies: boolean) {
         // ------------------- UI -------------------
         const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
         console.log(`requested ${pkg} by ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`);
         // ------------------------------------------
         let dependencies: Package[] = [];
         try {
-            dependencies = await pkg?.getDependencies();
+            dependencies = await pkg?.getDependencies(loadDevDependencies);
         }
         catch (err) {
             pkg.error = true;
@@ -32,7 +32,7 @@ export default class Dependencies extends EventEmitter {
         for (const depPkg of dependencies) {
             if (!depPkg.loading && !depPkg.resolved) {
                 this.emit(Events.PACKAGE_DISCOVERED, depPkg);
-                const loadPromise = this.loadRecursive(depPkg, level + 1, depth);
+                const loadPromise = this.loadRecursive(depPkg, level + 1, depth, false);
                 loadPromises.push(loadPromise);
             }
         }
@@ -58,8 +58,8 @@ export default class Dependencies extends EventEmitter {
             }
         }
     }
-    async load(depth: number) {
-        await this.loadRecursive(this.rootPackage, 0, depth);
+    async load(depth: number, loadDevDependencies: boolean) {
+        await this.loadRecursive(this.rootPackage, 0, depth, loadDevDependencies);
     }
 
     constructor(rootPackage: Package) {
