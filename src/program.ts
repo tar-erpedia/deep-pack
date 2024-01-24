@@ -71,56 +71,58 @@ export default class Program {
             throw new Error(`couldn't load self package.json`);
         }
     }
-    protected async onAction(packageUserSuppliedName: string) {
+    protected async onAction(packageUserSuppliedNames: string[]) {
         this.parseOptions();
         if (this.options.resume_last_run) {
             this.resumeLastRun();
         }
-        const rootPackage: Package | undefined = Package.fromString(packageUserSuppliedName);
-        if (rootPackage === undefined) {
-            this.exit(ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED, `"${packageUserSuppliedName}" is not a valid package name`);
-        }
-        if (this.options.out_deps) {
-            this.depsWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.DEPS));
-        }
-        if (this.options.out_resolved_deps) {
-            this.depsResolvedWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.RESOLVED_DEPS), { flags: "a" });
-        }
+        for(const packageUserSuppliedName of packageUserSuppliedNames){
+            const rootPackage: Package | undefined = Package.fromString(packageUserSuppliedName);
+            if (rootPackage === undefined) {
+                this.exit(ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED, `"${packageUserSuppliedName}" is not a valid package name`);
+            }
+            if (this.options.out_deps) {
+                this.depsWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.DEPS));
+            }
+            if (this.options.out_resolved_deps) {
+                this.depsResolvedWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.RESOLVED_DEPS), { flags: "a" });
+            }
 
-        const dependencies: Dependencies = new Dependencies(rootPackage!);
-        dependencies.on(DependenciesEvents.PACKAGE_DISCOVERED, async (pkg: Package) => {
-            if (this.depsWriteStream) {
-                (<fs.WriteStream>this.depsWriteStream!).write(`${pkg.fullName}${EOL}`);
-            }
-        });
-        dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
-            try {
-                (<fs.WriteStream>this.depsResolvedWriteStream!).write(`${pkg.fullName}${EOL}`);
-                this.writeToShell(`${pkg} resolved`, undefined, chalk.green);
-            }
-            catch (error) {
-                // TODO: return human-readable error
-            }
-        });
-        dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, async (pkg: Package) => {
-            // ------------------- UI -------------------
-            const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
-            this.writeToShell(`${pkg} resolve error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
-            // ------------------- UI -------------------
-        });
-        dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, async (pkg: Package) => {
-            // ------------------- UI -------------------
-            const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
-            this.writeToShell(`${pkg} download error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
-            // ------------------- UI -------------------
-        });
+            const dependencies: Dependencies = new Dependencies(rootPackage!);
+            dependencies.on(DependenciesEvents.PACKAGE_DISCOVERED, async (pkg: Package) => {
+                if (this.depsWriteStream) {
+                    (<fs.WriteStream>this.depsWriteStream!).write(`${pkg.fullName}${EOL}`);
+                }
+            });
+            dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
+                try {
+                    (<fs.WriteStream>this.depsResolvedWriteStream!).write(`${pkg.fullName}${EOL}`);
+                    this.writeToShell(`${pkg} resolved`, undefined, chalk.green);
+                }
+                catch (error) {
+                    // TODO: return human-readable error
+                }
+            });
+            dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, async (pkg: Package) => {
+                // ------------------- UI -------------------
+                const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
+                this.writeToShell(`${pkg} resolve error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
+                // ------------------- UI -------------------
+            });
+            dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, async (pkg: Package) => {
+                // ------------------- UI -------------------
+                const dependentOrDependentsStr = pkg.dependentOrDependentsToString()
+                this.writeToShell(`${pkg} download error. requested by: ${dependentOrDependentsStr !== "" ? dependentOrDependentsStr : "you"}`, undefined, chalk.red);
+                // ------------------- UI -------------------
+            });
 
-        await dependencies.load(this.options.max_depth, this.options.dev_deps);
-        if (!rootPackage!.resolved) {
-            this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing
-            this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);  // TODO: support run until finished
-            this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing
-        } 
+            await dependencies.load(this.options.max_depth, this.options.dev_deps);
+            if (!rootPackage!.resolved) {
+                this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing
+                this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);  // TODO: support run until finished
+                this.writeToShell("=========================================================", undefined, chalk.yellow);  // TODO: support === printing
+            } 
+        }
     }
     resumeLastRun() {
         try {
@@ -149,7 +151,7 @@ export default class Program {
         });
     }
     protected setArgs() {
-        program.arguments("<pacakge_name>");
+        program.arguments("<package_names...>");
     }
     protected setOptions() {
         program.option(`-d, --${OptionNames.MAX_DEPTH} <depth>`, "max depth. | integer bigger than 1", this.options.max_depth.toString())
