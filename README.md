@@ -4,7 +4,7 @@
 `npm i @tar-erpedia/deep-pack -g`
 ## CLI
 ### Synopsis
-`npm-deep-pack <package_name> [options]`
+`npm-deep-pack <package_names...> [options]`
 #### <package_name>
 in more detail: `<package_name>` ⇔ `[@<pkg_org>/]<pkg_name>[@<pkg_version>]`
 
