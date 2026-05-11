@@ -1,6 +1,9 @@
 lib/
 debug/
 
+# macOS
+.DS_Store
+
 # Logs
 logs
 *.log

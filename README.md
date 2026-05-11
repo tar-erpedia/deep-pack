@@ -37,12 +37,20 @@ npx npm-deep-pack <spec> [options]
 
     Valid examples: `/absolute/path/to/package.json`, `relative/path/to/package.json`
 
+3. ##### Exact dependencies from a package-lock.json file
+
+    Use `-l` or `--lock` with a package-lock path.
+    Dev-only locked packages are skipped by default. Add `--dev` to include them.
+
+    Valid examples: `-l package-lock.json`, `--lock ../path/to/package-lock.json`
+
 #### Options
 
 ```
 -V, --version                   output the version number
 -d, --max-depth <depth>         max depth. | integer bigger than 1 (default: null)
 --dev, --dev-deps               Resolve devDependencies
+-l, --lock <path>               Path to a package-lock.json file with exact package versions
 --no-peer, --no-peer-deps       Don't resolve peerDependencies
 --optional, --optional-deps     Resolve optionalDependencies
 --out-deps <out>                Export dependencies list? (default: false)
@@ -77,4 +85,16 @@ npx npm-deep-pack --no-peer react-router
 
 ```bash
 npx npm-deep-pack --dev --optional ../path/to/package.json
+```
+
+###### From package-lock.json: exact locked versions
+
+```bash
+npx npm-deep-pack -l ../path/to/package-lock.json
+```
+
+###### From package-lock.json: include dev dependencies too
+
+```bash
+npx npm-deep-pack -l ../path/to/package-lock.json --dev
 ```

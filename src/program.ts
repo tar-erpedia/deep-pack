@@ -24,6 +24,7 @@ const Files = {
 interface Options {
     maxDepth: number;
     devDeps: boolean;
+    lock?: string;
     peerDeps: boolean;
     optionalDeps: boolean;
     outDeps: boolean;
@@ -35,6 +36,7 @@ interface Options {
 const defaultOptions = {
     maxDepth: Infinity,
     devDeps: false,
+    lock: undefined,
     peerDeps: true,
     optionalDeps: false,
     outDeps: false,
@@ -52,6 +54,7 @@ export default class Program {
     public static outputTgzPath: string = "";
     public static downloadedPackagesPath = new Set<string>();
     public static packageJsonMode: boolean = false;
+    public static packageLockMode: boolean = false;
 
     public get description(): string {
         return this.packageJSONData?.description ?? "";
@@ -64,16 +67,21 @@ export default class Program {
         this.packageJSONData = (await import("../package.json", { with: { type: "json" } })).default;
     }
 
-    protected async onAction(packageUserSuppliedName: string, options: Options) {
+    protected async onAction(packageUserSuppliedName: string | undefined, options: Options) {
         this.options = options;
         if (this.options.resumeLastRun) {
             this.resumeLastRun();
         }
-        const rootPackage: Package | undefined = await Package.fromString(packageUserSuppliedName);
+        const rootPackage: Package | undefined = this.options.lock
+            ? await Package.fromPackageLock(this.options.lock, this.options.devDeps)
+            : packageUserSuppliedName
+              ? await Package.fromString(packageUserSuppliedName)
+              : undefined;
         if (!rootPackage) {
+            const invalidSpec = this.options.lock ?? packageUserSuppliedName ?? "";
             return this.exit(
                 ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED,
-                `"${packageUserSuppliedName}" is not a valid package name`
+                `"${invalidSpec}" is not a valid package name or package-lock.json path`
             );
         }
 
@@ -172,7 +180,7 @@ export default class Program {
 
     protected setArgs() {
         program.argument(
-            "<spec>",
+            "[spec]",
             "Package name(and optionally version) or path to a valid package.json. For example, next[@15] or ./package.json"
         );
     }
@@ -185,6 +193,7 @@ export default class Program {
             this.options.maxDepth
         );
         program.option(`--dev, --dev-deps`, "Resolve devDependencies");
+        program.option(`-l, --lock <path>`, "Path to a package-lock.json file with exact package versions");
         program.option(`--no-peer, --no-peer-deps`, "Don't resolve peerDependencies");
         program.option(`--optional, --optional-deps`, "Resolve optionalDependencies");
         program.option(`--out-deps <out>`, "Export dependencies list?", this.options.outDeps);
