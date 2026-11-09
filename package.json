@@ -1,6 +1,6 @@
 {
   "name": "@tar-erpedia/deep-pack",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "pack a package and pack it's dependencies",
   "type": "module",
   "main": "./lib/deep-pack.js",
@@ -52,6 +52,6 @@
     "typescript": "^5"
   },
   "engines": {
-    "node": "^18.20.0 || ^20.10.0 || ^22.0.0"
+    "node": "^20.17.0 || >=22.9.0"
   }
 }
