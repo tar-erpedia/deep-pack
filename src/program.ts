@@ -1,6 +1,6 @@
 import chalk, { type ChalkInstance } from "chalk";
 import { program } from "commander";
-import figlet, { type Options as FigletOptions } from "figlet";
+import figlet, { type FigletOptions } from "figlet";
 import path from "node:path";
 import Package, { PackageSpecError } from "./package.js";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies.js";

@@ -36,22 +36,21 @@
   },
   "homepage": "https://github.com/tar-erpedia/deep-pack#readme",
   "dependencies": {
-    "chalk": "^5.5.0",
-    "commander": "^14.0.0",
-    "figlet": "^1.5.0",
-    "npm-package-arg": "^13.0.0",
-    "pacote": "^21.0.0",
-    "tar": "^7.4.3"
+    "chalk": "^6.0.1",
+    "commander": "^15.1.0",
+    "figlet": "^1.12.0",
+    "npm-package-arg": "^13.0.2",
+    "pacote": "^21.5.3",
+    "tar": "^7.5.22"
   },
   "devDependencies": {
-    "@types/figlet": "^1.2.1",
-    "@types/node": "^22.17.0",
-    "@types/npm-package-arg": "^6.1.0",
+    "@types/node": "^22.20.5",
+    "@types/npm-package-arg": "^6.1.4",
     "@types/pacote": "^11.1.8",
-    "tsx": "^4.20.3",
-    "typescript": "^5"
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
   },
   "engines": {
-    "node": "^20.17.0 || >=22.9.0"
+    "node": ">=22.12.0"
   }
 }
