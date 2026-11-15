@@ -294,7 +294,7 @@ export default class Program {
                 return parsed;
             }
         );
-        program.option(`--dev, --dev-deps`, "Resolve root devDependencies (always on for package.json and lock files)", false);
+        program.option(`--dev, --dev-deps`, "Resolve root devDependencies (always on for package.json and lock files)");
         program.option(`--dev-deps-recursive, --dev-recursive`, "Resolve devDependencies at every level", false);
         program.option(`--no-peer, --no-peer-deps`, "Don't resolve peerDependencies");
         program.option(`--optional, --optional-deps`, "Resolve optionalDependencies (and the root's optional peers)", false);
@@ -306,7 +306,7 @@ export default class Program {
         program.action(this.onAction.bind(this));
     }
 
-    // Like `clear` in modern terminals: scroll the current screen into the scrollback (nothing is erased
+    // Like Ctrl+L in a shell: scroll the current screen into the scrollback (nothing is erased
     // or cut) and put the cursor at the top. Skipped when output isn't a terminal.
     public clearShell() {
         if (!process.stdout.isTTY) return;
