@@ -306,8 +306,11 @@ export default class Program {
         program.action(this.onAction.bind(this));
     }
 
+    // Like `clear` in modern terminals: scroll the current screen into the scrollback (nothing is erased
+    // or cut) and put the cursor at the top. Skipped when output isn't a terminal.
     public clearShell() {
-        process.stdout.write("\x1B[2J\x1B[H");
+        if (!process.stdout.isTTY) return;
+        process.stdout.write("\n".repeat(process.stdout.rows) + "\x1B[H");
     }
 
     public async exec() {
