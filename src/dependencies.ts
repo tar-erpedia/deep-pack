@@ -1,6 +1,7 @@
 import EventEmitter from "node:events";
 import type Package from "./package.js";
 import Program from "./program.js";
+import { errorMessage } from "./utils.js";
 
 export const Events = {
     PACKAGE_DISCOVERED: "package_discovered",
@@ -15,11 +16,11 @@ export default class Dependencies extends EventEmitter {
 
     private reportUnexpectedFailure(pkg: Package, error: unknown) {
         pkg.error = true;
-        pkg.failureReason ??= error instanceof Error ? error.message : String(error);
+        pkg.failureReason ??= errorMessage(error);
         try {
             this.emit(Events.PACKAGE_RESOLVE_ERROR, pkg);
         } catch (reportError) {
-            console.error(`Failed to report ${pkg}: ${reportError instanceof Error ? reportError.message : String(reportError)}`);
+            console.error(`Failed to report ${pkg}: ${errorMessage(reportError)}`);
         }
     }
 
@@ -49,7 +50,7 @@ export default class Dependencies extends EventEmitter {
             this.emit(Events.PACKAGE_RESOLVED, pkg);
         } catch (error) {
             pkg.error = true;
-            pkg.failureReason = error instanceof Error ? error.message : String(error);
+            pkg.failureReason = errorMessage(error);
             this.emit(Events.PACKAGE_DOWNLOAD_ERROR, pkg);
         }
 
@@ -85,7 +86,7 @@ export default class Dependencies extends EventEmitter {
         } catch (error) {
             await Promise.all(childLoads);
             pkg.error = true;
-            pkg.failureReason ??= error instanceof Error ? error.message : String(error);
+            pkg.failureReason ??= errorMessage(error);
             this.emit(Events.PACKAGE_RESOLVE_ERROR, pkg);
             return;
         }
@@ -115,6 +116,5 @@ export default class Dependencies extends EventEmitter {
     constructor(rootPackage: Package) {
         super();
         this.rootPackage = rootPackage;
-        this.rootPackage.isRootPackage = true;
     }
 }

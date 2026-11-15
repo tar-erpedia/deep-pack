@@ -12,6 +12,7 @@
   "scripts": {
     "debug-test": "cd ./debug && rm -rf * && tsx ../src/deep-pack.ts \"next\"",
     "build": "tsc -p .",
+    "test": "node --import tsx --test test/*.test.ts",
     "local": "sudo npm i -g && npm-deep-pack",
     "zpublish": "npm publish --access public",
     "refresh": "rm -rf ./node_modules ./package-lock.json && npm install"

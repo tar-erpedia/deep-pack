@@ -6,6 +6,7 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import Program from "./program.js";
+import { errorMessage } from "./utils.js";
 
 // Fix pacote types missing key - peerDependenciesMeta
 declare module "pacote" {
@@ -15,7 +16,6 @@ declare module "pacote" {
 }
 
 const LATEST: PackageVersion = "latest";
-const REGISTRY_SPEC_TYPES = new Set(["range", "version", "tag"]);
 type RegistryManifest = Awaited<ReturnType<typeof pacote.manifest>>;
 
 interface PackageLockPackage {
@@ -36,16 +36,12 @@ interface PackageLockDependency extends PackageLockPackage {
 interface PackageLock {
     name?: string;
     version?: string;
+    lockfileVersion?: number;
     packages?: Record<string, PackageLockPackage>;
     dependencies?: Record<string, PackageLockDependency>;
 }
 
-interface RegistrySpec {
-    name: string;
-    spec: string;
-    version: string;
-    type: string;
-}
+type RegistrySpec = npa.Result & { name: string; fetchSpec: string };
 
 interface SelectedDependency {
     name: string;
@@ -65,44 +61,8 @@ function fullNameByNameAndVersion(name: string, version: string): PackageFullNam
     return `${name}@${version}`;
 }
 
-function errorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : String(error);
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-class Semaphore {
-    private active = 0;
-    private waiters: Array<() => void> = [];
-
-    constructor(private readonly limit: number) {}
-
-    async run<T>(operation: () => Promise<T>): Promise<T> {
-        if (this.active >= this.limit) {
-            await new Promise<void>((resolve) => this.waiters.push(resolve));
-        } else {
-            this.active++;
-        }
-
-        try {
-            return await operation();
-        } finally {
-            const next = this.waiters.shift();
-            if (next) {
-                next();
-            } else {
-                this.active--;
-            }
-        }
-    }
-}
-
 export default class Package {
     static readonly MAX_TRIES: number = 3;
-    static readonly MAX_CONCURRENT_NETWORK_OPERATIONS: number = 16;
-    private static readonly networkLimiter = new Semaphore(Package.MAX_CONCURRENT_NETWORK_OPERATIONS);
     private static readonly pendingManifests = new Map<string, Promise<RegistryManifest>>();
     private static readonly failedSpecs = new Map<string, Package>();
     private static readonly downloadsByPath = new Map<string, { fullName: string; promise: Promise<number> }>();
@@ -113,6 +73,7 @@ export default class Package {
     public failureReason: string | undefined;
     public isRootPackage: boolean = false;
     public lockOptional: boolean = false;
+    public packageLock: PackageLock | undefined;
     public manifest: RegistryManifest | undefined;
     public name: string;
     public optionalEdge: boolean | undefined;
@@ -120,10 +81,6 @@ export default class Package {
     public warning: boolean = false;
 
     static cache = new Map<PackageFullName, Package>();
-
-    public get isRoot(): boolean {
-        return this.isRootPackage;
-    }
 
     public get fullName(): PackageFullName {
         return fullNameByNameAndVersion(this.name, this.version);
@@ -155,11 +112,12 @@ export default class Package {
         }
     }
 
+    // No concurrency cap here: pacote's HTTP agent already limits connections (maxSockets, default 15).
     private static async withNetworkRetries<T>(operation: () => Promise<T>, context: string): Promise<T> {
         let lastError: unknown;
         for (let attempt = 1; attempt <= Package.MAX_TRIES; attempt++) {
             try {
-                return await Package.networkLimiter.run(operation);
+                return await operation();
             } catch (error) {
                 lastError = error;
                 // Missing packages/versions won't appear on retry
@@ -176,24 +134,8 @@ export default class Package {
     private static registrySpec(name: string, spec: string): RegistrySpec | undefined {
         try {
             const parsed = name ? npa.resolve(name, spec) : npa(spec);
-            if (parsed.type === "alias") {
-                const subSpec = (parsed as typeof parsed & { subSpec?: { type: string; name?: string; raw: string; fetchSpec?: string | null } }).subSpec;
-                if (!subSpec || !subSpec.name || !REGISTRY_SPEC_TYPES.has(subSpec.type)) return undefined;
-                return {
-                    name: subSpec.name,
-                    spec: subSpec.raw,
-                    version: subSpec.fetchSpec ?? spec,
-                    type: subSpec.type,
-                };
-            }
-            const packageName = parsed.name ?? name;
-            if (!packageName || !REGISTRY_SPEC_TYPES.has(parsed.type)) return undefined;
-            return {
-                name: packageName,
-                spec: parsed.raw,
-                version: parsed.fetchSpec ?? spec,
-                type: parsed.type,
-            };
+            const target = parsed.type === "alias" ? (parsed as npa.AliasResult).subSpec : parsed;
+            return target.registry && target.name && target.fetchSpec ? (target as RegistrySpec) : undefined;
         } catch (_error) {
             return undefined;
         }
@@ -237,7 +179,7 @@ export default class Package {
         if (!this.fullName) {
             throw new Error("Not enough data to download tgz file - missing or invalid package name or version");
         }
-        if ((Program.packageJsonMode || Program.packageLockMode) && this.isRoot) return;
+        if ((Program.packageJsonMode || Program.packageLockMode) && this.isRootPackage) return;
 
         const downloadDirectory = Program.tempDir || process.cwd();
         const downloadPath = path.resolve(downloadDirectory, `${this.normalizedNameForPath}-${this.version}.tgz`);
@@ -271,16 +213,25 @@ export default class Package {
         onDependency?: (dependency: Package) => void
     ): Promise<Package[]> {
         if (Program.packageLockMode) {
-            const dependencies = this.isRoot ? this.dependencies : [];
-            dependencies.forEach((dependency) => onDependency?.(dependency));
-            return dependencies;
+            if (!this.isRootPackage || !this.packageLock) return [];
+            this.dependencies = Package.collectLockPackages(
+                this.packageLock,
+                this,
+                includePeerDependencies,
+                includeOptionalDependencies
+            );
+            for (const dependency of this.dependencies) {
+                dependency.addDependent(this, dependency.lockOptional);
+                onDependency?.(dependency);
+            }
+            return this.dependencies;
         }
 
-        let responseBodyAsJSON = this.manifest;
-        if (!responseBodyAsJSON) {
+        let ownManifest = this.manifest;
+        if (!ownManifest) {
             try {
-                responseBodyAsJSON = await Package.fetchManifest(this.fullName);
-                this.manifest = responseBodyAsJSON;
+                ownManifest = await Package.fetchManifest(this.fullName);
+                this.manifest = ownManifest;
             } catch (error) {
                 this.error = true;
                 this.failureReason = errorMessage(error);
@@ -288,7 +239,7 @@ export default class Package {
             }
         }
 
-        const isPackageJsonRoot = Program.packageJsonMode && this.isRoot;
+        const isPackageJsonRoot = Program.packageJsonMode && this.isRootPackage;
         const includeDev = includeDevDependencies || isPackageJsonRoot;
         const includeOptional = includeOptionalDependencies || isPackageJsonRoot;
         const selectedDependencies = new Map<string, SelectedDependency>();
@@ -308,32 +259,32 @@ export default class Package {
             }
         };
 
-        for (const [name, spec] of Object.entries(responseBodyAsJSON.dependencies ?? {})) {
+        for (const [name, spec] of Object.entries(ownManifest.dependencies ?? {})) {
             select(name, spec, "dependency", false);
         }
 
         if (includePeerDependencies) {
-            const peerMeta = responseBodyAsJSON.peerDependenciesMeta as
+            const peerMeta = ownManifest.peerDependenciesMeta as
                 | Record<string, { optional?: boolean }>
                 | null
                 | undefined;
-            for (const [name, spec] of Object.entries(responseBodyAsJSON.peerDependencies ?? {})) {
+            for (const [name, spec] of Object.entries(ownManifest.peerDependencies ?? {})) {
                 if (!peerMeta?.[name]?.optional) {
                     select(name, spec, "peer", false);
-                } else if (includeOptionalDependencies && this.isRoot) {
+                } else if (includeOptionalDependencies && this.isRootPackage) {
                     select(name, spec, "peer", true);
                 }
             }
         }
 
         if (includeDev) {
-            for (const [name, spec] of Object.entries(responseBodyAsJSON.devDependencies ?? {})) {
+            for (const [name, spec] of Object.entries(ownManifest.devDependencies ?? {})) {
                 select(name, spec, "dev", false);
             }
         }
 
         if (includeOptional) {
-            for (const [name, spec] of Object.entries(responseBodyAsJSON.optionalDependencies ?? {})) {
+            for (const [name, spec] of Object.entries(ownManifest.optionalDependencies ?? {})) {
                 select(name, spec, "optional", true);
             }
         }
@@ -343,39 +294,30 @@ export default class Package {
                 const registrySpec = Package.registrySpec(name, spec);
                 let dependency: Package;
                 if (!registrySpec) {
-                    dependency = Package.failedSpec(name, spec, spec, false);
-                    dependency.addDependent(this, optional);
-                    if (!dependency.error) {
-                        dependency.error = true;
-                        dependency.warning = true;
-                        dependency.failureReason = `Non-registry dependency spec "${spec}" was skipped`;
-                    }
+                    dependency = Package.skippedSpec(name, spec);
                 } else {
-                    const failedSpec = Package.failedSpecs.get(Package.failedSpecKey(registrySpec.name, registrySpec.spec));
+                    const failedSpec = Package.failedSpecs.get(Package.failedSpecKey(registrySpec.name, registrySpec.raw));
                     const cachedExactVersion = registrySpec.type === "version"
-                        ? Package.cache.get(fullNameByNameAndVersion(registrySpec.name, registrySpec.version))
+                        ? Package.cache.get(fullNameByNameAndVersion(registrySpec.name, registrySpec.fetchSpec))
                         : undefined;
                     if (failedSpec) {
                         dependency = failedSpec;
-                        dependency.addDependent(this, optional);
                     } else if (cachedExactVersion?.manifest || cachedExactVersion?.error) {
                         dependency = cachedExactVersion;
-                        dependency.addDependent(this, optional);
                     } else {
                         try {
-                            const manifest = await Package.fetchManifest(registrySpec.spec);
+                            const manifest = await Package.fetchManifest(registrySpec.raw);
                             dependency = Package.fromNameAndVersion(manifest.name, manifest.version);
                             dependency.manifest = manifest;
-                            dependency.addDependent(this, optional);
                         } catch (error) {
-                            dependency = Package.failedSpec(registrySpec.name, registrySpec.spec, registrySpec.version);
-                            dependency.addDependent(this, optional);
+                            dependency = Package.failedSpec(registrySpec.name, registrySpec.raw, registrySpec.fetchSpec);
                             dependency.error = true;
                             dependency.failureReason = errorMessage(error);
                         }
                     }
                 }
 
+                dependency.addDependent(this, optional);
                 onDependency?.(dependency);
                 return dependency;
             })
@@ -405,6 +347,15 @@ export default class Package {
             pkg = cacheInPackageCache ? Package.fromNameAndVersion(name, version) : new Package(name, version);
             Package.failedSpecs.set(key, pkg);
         }
+        return pkg;
+    }
+
+    // A git/file/url/etc. spec: reported as a warning and never downloaded.
+    private static skippedSpec(name: string, spec: string): Package {
+        const pkg = Package.failedSpec(name, spec, spec, false);
+        pkg.error = true;
+        pkg.warning = true;
+        pkg.failureReason = `Non-registry dependency spec "${spec}" was skipped`;
         return pkg;
     }
 
@@ -452,23 +403,20 @@ export default class Package {
 
     private static lockPackageIncluded(
         lockPackage: PackageLockPackage,
-        includeDevDependencies: boolean,
         includePeerDependencies: boolean,
         includeOptionalDependencies: boolean
     ): boolean {
         if (lockPackage.link) return false;
         if (lockPackage.peer && !includePeerDependencies) return false;
+        // shortcut: a flat lock can't tell the root's optionalDependencies from transitive ones, so all need --optional; walk the lock graph if root optionals must be on by default.
         if (lockPackage.optional && !includeOptionalDependencies) return false;
-        if (lockPackage.dev && !includeDevDependencies) return false;
-        if (lockPackage.devOptional && (!includeDevDependencies || !includeOptionalDependencies)) return false;
         return true;
     }
 
-    // Converts package-lock entries into Package objects, optionally including dev/optional packages.
+    // Converts package-lock entries into Package objects. Dev entries are always included, like a package.json root.
     private static collectLockPackages(
         packageLock: PackageLock,
         rootPackage: Package,
-        includeDevDependencies: boolean,
         includePeerDependencies: boolean,
         includeOptionalDependencies: boolean
     ): Package[] {
@@ -477,14 +425,9 @@ export default class Package {
             if (nonRegistrySpec === undefined && !version) return;
 
             const pkg = nonRegistrySpec !== undefined
-                ? Package.failedSpec(name, nonRegistrySpec, nonRegistrySpec, false)
+                ? Package.skippedSpec(name, nonRegistrySpec)
                 : Package.fromNameAndVersion(name, version!);
             if (pkg.fullName === rootPackage.fullName) return;
-            if (nonRegistrySpec !== undefined) {
-                pkg.error = true;
-                pkg.warning = true;
-                pkg.failureReason = `Non-registry dependency spec "${nonRegistrySpec}" was skipped`;
-            }
             const existing = packages.get(pkg.fullName);
             if (existing) {
                 existing.lockOptional = existing.lockOptional && optional;
@@ -497,14 +440,7 @@ export default class Package {
         if (packageLock.packages) {
             for (const [packagePath, lockPackage] of Object.entries(packageLock.packages)) {
                 if (packagePath === "") continue;
-                if (
-                    !Package.lockPackageIncluded(
-                        lockPackage,
-                        includeDevDependencies,
-                        includePeerDependencies,
-                        includeOptionalDependencies
-                    )
-                ) {
+                if (!Package.lockPackageIncluded(lockPackage, includePeerDependencies, includeOptionalDependencies)) {
                     continue;
                 }
 
@@ -512,34 +448,17 @@ export default class Package {
                 if (!packageName) continue;
 
                 const nonRegistrySpec = Package.lockNonRegistrySpec(packageName, lockPackage);
-                addLockPackage(
-                    packageName,
-                    lockPackage.version,
-                    Boolean(lockPackage.optional || lockPackage.devOptional),
-                    nonRegistrySpec
-                );
+                addLockPackage(packageName, lockPackage.version, Boolean(lockPackage.optional), nonRegistrySpec);
             }
         } else if (packageLock.dependencies) {
             const collectVersion1Dependencies = (dependencies: Record<string, PackageLockDependency>) => {
                 for (const [packageName, dependency] of Object.entries(dependencies)) {
-                    if (
-                        !Package.lockPackageIncluded(
-                            dependency,
-                            includeDevDependencies,
-                            includePeerDependencies,
-                            includeOptionalDependencies
-                        )
-                    ) {
+                    if (!Package.lockPackageIncluded(dependency, includePeerDependencies, includeOptionalDependencies)) {
                         continue;
                     }
 
                     const nonRegistrySpec = Package.lockNonRegistrySpec(packageName, dependency);
-                    addLockPackage(
-                        packageName,
-                        dependency.version,
-                        Boolean(dependency.optional || dependency.devOptional),
-                        nonRegistrySpec
-                    );
+                    addLockPackage(packageName, dependency.version, Boolean(dependency.optional), nonRegistrySpec);
 
                     if (dependency.dependencies) {
                         collectVersion1Dependencies(dependency.dependencies);
@@ -553,136 +472,36 @@ export default class Package {
         return [...packages.values()];
     }
 
-    // Creates a root package from a package-lock.json file and attaches its locked dependencies.
-    static async fromPackageLock(
-        packageLockPath: string,
-        includeDevDependencies: boolean = false,
-        includePeerDependencies: boolean = true,
-        includeOptionalDependencies: boolean = false
-    ): Promise<Package> {
-        let packageLock: PackageLock;
-        try {
-            const packageLockFile = (await fsPromises.readFile(packageLockPath)).toString();
-            const parsed: unknown = JSON.parse(packageLockFile);
-            if (!isObjectRecord(parsed)) {
-                throw new Error("package-lock.json must contain a JSON object");
-            }
-            if (parsed.name !== undefined && typeof parsed.name !== "string") {
-                throw new Error("package-lock.json has an invalid package name");
-            }
-            if (parsed.version !== undefined && typeof parsed.version !== "string") {
-                throw new Error("package-lock.json has an invalid package version");
-            }
-            if (parsed.packages !== undefined && !isObjectRecord(parsed.packages)) {
-                throw new Error("package-lock.json has an invalid packages map");
-            }
-            if (parsed.dependencies !== undefined && !isObjectRecord(parsed.dependencies)) {
-                throw new Error("package-lock.json has an invalid dependencies map");
-            }
-
-            const validateLockPackage = (entry: unknown, includeDependencies: boolean): void => {
-                if (!isObjectRecord(entry)) {
-                    throw new Error("package-lock.json contains an invalid package entry");
-                }
-                for (const field of ["name", "version", "resolved"] as const) {
-                    if (entry[field] !== undefined && typeof entry[field] !== "string") {
-                        throw new Error(`package-lock.json contains an invalid ${field}`);
-                    }
-                }
-                for (const field of ["link", "dev", "devOptional", "optional", "peer"] as const) {
-                    if (entry[field] !== undefined && typeof entry[field] !== "boolean") {
-                        throw new Error(`package-lock.json contains an invalid ${field} flag`);
-                    }
-                }
-                if (includeDependencies && entry.dependencies !== undefined) {
-                    if (!isObjectRecord(entry.dependencies)) {
-                        throw new Error("package-lock.json contains an invalid dependencies map");
-                    }
-                    for (const dependency of Object.values(entry.dependencies)) {
-                        validateLockPackage(dependency, true);
-                    }
-                }
-            };
-
-            for (const lockPackage of Object.values((parsed.packages ?? {}) as Record<string, unknown>)) {
-                validateLockPackage(lockPackage, false);
-            }
-            for (const lockPackage of Object.values((parsed.dependencies ?? {}) as Record<string, unknown>)) {
-                validateLockPackage(lockPackage, true);
-            }
-
-            packageLock = parsed as PackageLock;
-        } catch (ex) {
-            throw new PackageSpecError(
-                `Failed to read package-lock.json from "${packageLockPath}": ${errorMessage(ex)}`,
-                "invalid"
-            );
-        }
-
-        try {
-            const rootName = packageLock.name ?? "package-lock-root";
-            const rootVersion = packageLock.version ?? "0.0.0";
-            const rootPackage = Package.fromNameAndVersion(rootName, rootVersion);
-            rootPackage.isRootPackage = true;
-            rootPackage.dependencies = Package.collectLockPackages(
-                packageLock,
-                rootPackage,
-                includeDevDependencies,
-                includePeerDependencies,
-                includeOptionalDependencies
-            );
-
-            for (const dependency of rootPackage.dependencies) {
-                dependency.addDependent(rootPackage, dependency.lockOptional);
-            }
-
-            Program.packageLockMode = true;
-            return rootPackage;
-        } catch (error) {
-            throw new PackageSpecError(`Invalid package-lock.json: ${errorMessage(error)}`, "invalid");
-        }
+    // Creates a root package from parsed package-lock.json data; its entries are collected in getDependencies.
+    private static fromPackageLock(packageLock: PackageLock): Package {
+        const rootPackage = Package.fromNameAndVersion(packageLock.name ?? "package-lock-root", packageLock.version ?? "0.0.0");
+        rootPackage.isRootPackage = true;
+        rootPackage.packageLock = packageLock;
+        Program.packageLockMode = true;
+        return rootPackage;
     }
 
-    // Creates a package from a package.json path or an npm package spec.
+    // Creates a package from a package.json / package-lock.json path or an npm package spec.
     static async fromString(packageNameInAnyFormat: string): Promise<Package> {
         try {
             if (fs.existsSync(packageNameInAnyFormat)) {
-                const packageJsonPath = path.resolve(packageNameInAnyFormat);
-                if (!(await fsPromises.stat(packageJsonPath)).isFile()) {
+                const filePath = path.resolve(packageNameInAnyFormat);
+                if (!(await fsPromises.stat(filePath)).isFile()) {
                     throw new PackageSpecError(
-                        "A package.json file path is required; directories are not registry specs",
+                        "A package.json or package-lock.json file path is required; directories are not registry specs",
                         "invalid"
                     );
                 }
 
+                const parsed = JSON.parse(await fsPromises.readFile(filePath, "utf8"));
+                if (typeof parsed?.lockfileVersion === "number") {
+                    console.log(`${packageNameInAnyFormat} is a lock file, using exact locked versions`);
+                    return Package.fromPackageLock(parsed as PackageLock);
+                }
+
                 console.log(`${packageNameInAnyFormat} is a file, using as package.json`);
-                const packageJsonFile = (await fsPromises.readFile(packageJsonPath)).toString();
-                const parsed: unknown = JSON.parse(packageJsonFile);
-                if (!isObjectRecord(parsed)) {
-                    throw new PackageSpecError("Invalid package.json format", "invalid");
-                }
-
-                const packageJson = parsed as unknown as RegistryManifest;
-                if (packageJson.name !== undefined && (typeof packageJson.name !== "string" || !packageJson.name)) {
-                    throw new PackageSpecError("Invalid package.json format, invalid name", "invalid");
-                }
-                packageJson.name ??= path.basename(path.dirname(packageJsonPath));
-                if (packageJson.version !== undefined && typeof packageJson.version !== "string") {
-                    throw new PackageSpecError("Invalid package.json format, invalid version", "invalid");
-                }
-                for (const dependencyField of [
-                    "dependencies",
-                    "devDependencies",
-                    "peerDependencies",
-                    "optionalDependencies",
-                ] as const) {
-                    const dependencies = parsed[dependencyField];
-                    if (dependencies === undefined) continue;
-                    if (!isObjectRecord(dependencies) || Object.values(dependencies).some((spec) => typeof spec !== "string")) {
-                        throw new PackageSpecError(`Invalid package.json format, invalid ${dependencyField}`, "invalid");
-                    }
-                }
-
+                const packageJson = parsed as RegistryManifest;
+                packageJson.name ||= path.basename(path.dirname(filePath));
                 Program.packageJsonMode = true;
                 const pkg = Package.fromNameAndVersion(packageJson.name, packageJson.version ?? "0.0.0");
                 pkg.manifest = packageJson;
@@ -699,7 +518,7 @@ export default class Package {
             }
 
             try {
-                const manifest = await Package.fetchManifest(registrySpec.spec);
+                const manifest = await Package.fetchManifest(registrySpec.raw);
                 const pkg = Package.fromNameAndVersion(manifest.name, manifest.version);
                 pkg.manifest = manifest;
                 pkg.isRootPackage = true;
@@ -709,7 +528,7 @@ export default class Package {
             }
         } catch (ex) {
             if (ex instanceof PackageSpecError) throw ex;
-            throw new PackageSpecError(errorMessage(ex), "invalid");
+            throw new PackageSpecError(`Failed to read "${packageNameInAnyFormat}": ${errorMessage(ex)}`, "invalid");
         }
     }
 }
