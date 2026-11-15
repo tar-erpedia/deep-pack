@@ -220,12 +220,12 @@ export default class Program {
             if (this.options.outputTgz) {
                 bundleSize = (await fsPromises.stat(outputPath)).size;
             }
-            const { errors } = this.printSummary(failures.values(), { outputPath, bundleSize });
+            const { errors } = this.printSummary([...failures.values()], { outputPath, bundleSize });
             if (errors.length > 0) process.exitCode = ExitCodes.GENERAL_ERROR;
         } catch (error) {
             if (interrupted) return;
             this.writeToShell(`Failed to finish deep-pack: ${errorMessage(error)}`, undefined, chalk.red);
-            this.printSummary(failures.values(), { fatalErrors: [errorMessage(error)] });
+            this.printSummary([...failures.values()], { fatalErrors: [errorMessage(error)] });
             process.exitCode = ExitCodes.GENERAL_ERROR;
         } finally {
             process.removeListener("SIGINT", cleanupOnInterrupt);
@@ -242,12 +242,12 @@ export default class Program {
     }
 
     private printSummary(
-        failures: Iterable<Package>,
+        failures: Package[],
         { outputPath, bundleSize, fatalErrors = [] }: { outputPath?: string; bundleSize?: number; fatalErrors?: string[] } = {}
     ) {
         const isWarning = (pkg: Package) => pkg.warning || pkg.optionalEdge === true;
-        const warnings = [...failures].filter(isWarning);
-        const errors = [...failures].filter((pkg) => !isWarning(pkg));
+        const warnings = failures.filter(isWarning);
+        const errors = failures.filter((pkg) => !isWarning(pkg));
         const totalSize = [...Program.downloadedPackagesPath.values()].reduce((sum, size) => sum + size, 0);
 
         this.writeToShell("==================== Summary ====================", undefined, chalk.white);
