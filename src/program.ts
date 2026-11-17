@@ -8,7 +8,8 @@ import os from "node:os";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import type { Manifest } from "pacote";
-import { errorMessage, moveFile, outputSize, sanitizePathComponent, timestampSuffix } from "./utils.js";
+import { errorMessage, moveFile, outputSize } from "./utils.js";
+import { createWorkspace } from "./workspace.js";
 
 const ExitCodes = {
     SUCCESS: 0,
@@ -60,34 +61,6 @@ export default class Program {
         this.packageJSONData = (await import("../package.json", { with: { type: "json" } })).default;
     }
 
-    // Creates the output folder or an empty .tgz placeholder so a concurrent run cannot take the same name.
-    private reserveOutputPath(pkg: Package, outputTgz: boolean): string {
-        const extension = outputTgz ? ".tgz" : "";
-        const basePath = path.resolve(
-            `deep-pack-${sanitizePathComponent(pkg.normalizedNameForPath)}_${sanitizePathComponent(pkg.version)}`
-        );
-        const timestamp = timestampSuffix();
-
-        for (let attempt = 0; ; attempt++) {
-            const suffix = attempt === 0 ? "" : attempt === 1 ? `_${timestamp}` : `_${timestamp}-${attempt - 1}`;
-            const outputPath = `${basePath}${suffix}${extension}`;
-            try {
-                if (outputTgz) fs.closeSync(fs.openSync(outputPath, "wx"));
-                else fs.mkdirSync(outputPath);
-                return outputPath;
-            } catch (error) {
-                if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-                if (attempt === 0) {
-                    this.writeToShell(
-                        `Warning: output destination exists (${outputPath}); using a timestamped output name instead.`,
-                        undefined,
-                        chalk.yellow
-                    );
-                }
-            }
-        }
-    }
-
     protected async onAction(packageUserSuppliedName: string | undefined, options: Options) {
         this.options = { ...defaultOptions, ...options, maxDepth: options.maxDepth ?? Infinity };
 
@@ -124,31 +97,27 @@ export default class Program {
 
         Program.downloadedPackagesPath.clear();
 
-        // Both paths are created synchronously, so no signal can arrive between creating them and
-        // knowing about them, and Ctrl+C cleanup can be synchronous too.
-        const outputPath = this.reserveOutputPath(rootPackage, this.options.outputTgz);
-        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "deep-pack-"));
+        const workspace = createWorkspace(rootPackage.normalizedNameForPath, rootPackage.version, this.options.outputTgz, (existing) =>
+            this.writeToShell(
+                `Warning: output destination exists (${existing}); using a timestamped output name instead.`,
+                undefined,
+                chalk.yellow
+            )
+        );
+        const { outputPath, tempDir } = workspace;
         Program.tempDir = tempDir;
-        const remove = (target: string) => fs.rmSync(target, { recursive: true, force: true });
-        const abort = () => {
-            remove(tempDir);
-            remove(outputPath);
-            process.exit(130);
-        };
 
         const failures = new Map<string, Package>();
-        process.once("SIGINT", abort);
         try {
             await this.pack(rootPackage, tempDir, outputPath, failures);
         } catch (error) {
-            remove(outputPath);
+            workspace.discardOutput();
             this.writeToShell(`Failed to finish deep-pack: ${errorMessage(error)}`, undefined, chalk.red);
             this.printSummary([...failures.values()], { fatalErrors: [errorMessage(error)] });
             process.exitCode = ExitCodes.GENERAL_ERROR;
             return;
         } finally {
-            process.off("SIGINT", abort);
-            remove(tempDir);
+            workspace.dispose();
         }
 
         const bundleSize = this.options.outputTgz ? fs.statSync(outputPath).size : undefined;
