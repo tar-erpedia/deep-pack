@@ -1,13 +1,14 @@
 import chalk, { type ChalkInstance } from "chalk";
-import { program, type OptionValues } from "commander";
-import figlet, { type Options as FigletOptions } from "figlet";
+import { InvalidArgumentError, program } from "commander";
+import figlet, { type FigletOptions } from "figlet";
 import path from "node:path";
-import Package from "./package.js";
+import Package, { PackageSpecError } from "./package.js";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies.js";
 import os from "node:os";
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import type { Manifest } from "pacote";
+import { errorMessage, moveFile, outputSize } from "./utils.js";
+import { withWorkspace } from "./workspace.js";
 
 const ExitCodes = {
     SUCCESS: 0,
@@ -18,41 +19,33 @@ const ExitCodes = {
 
 const Files = {
     DEPS: "deep-pack-deps-log.txt",
-    RESOLVED_DEPS: "deep-pack-resolved-deps-log.txt",
 } as const;
 
 interface Options {
     maxDepth: number;
     devDeps: boolean;
-    lock?: string;
+    devRecursive: boolean;
     peerDeps: boolean;
     optionalDeps: boolean;
     outDeps: boolean;
-    outResolvedDeps: boolean;
-    resumeLastRun: boolean;
     outputTgz: boolean;
 }
 
 const defaultOptions = {
     maxDepth: Infinity,
     devDeps: false,
-    lock: undefined,
+    devRecursive: false,
     peerDeps: true,
     optionalDeps: false,
     outDeps: false,
-    outResolvedDeps: true,
-    resumeLastRun: true,
     outputTgz: false,
 } satisfies Options;
 
 export default class Program {
-    protected depsWriteStream: fs.WriteStream = fs.createWriteStream(os.devNull);
-    protected depsResolvedWriteStream: fs.WriteStream = fs.createWriteStream(os.devNull);
     protected packageJSONData: Partial<Manifest> | undefined;
-    protected optionArgs: OptionValues | undefined;
     protected options: Options = defaultOptions;
-    public static outputTgzPath: string = "";
-    public static downloadedPackagesPath = new Set<string>();
+    public static tempDir: string = "";
+    public static downloadedPackagesPath = new Map<string, number>();
     public static packageJsonMode: boolean = false;
     public static packageLockMode: boolean = false;
 
@@ -68,146 +61,191 @@ export default class Program {
     }
 
     protected async onAction(packageUserSuppliedName: string | undefined, options: Options) {
-        this.options = options;
-        if (this.options.resumeLastRun) {
-            this.resumeLastRun();
-        }
-        const rootPackage: Package | undefined = this.options.lock
-            ? await Package.fromPackageLock(this.options.lock, this.options.devDeps)
-            : packageUserSuppliedName
-              ? await Package.fromString(packageUserSuppliedName)
-              : undefined;
-        if (!rootPackage) {
-            const invalidSpec = this.options.lock ?? packageUserSuppliedName ?? "";
-            return this.exit(
-                ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED,
-                `"${invalidSpec}" is not a valid package name or package-lock.json path`
-            );
+        this.options = { ...defaultOptions, ...options, maxDepth: options.maxDepth ?? Infinity };
+
+        if (!packageUserSuppliedName) {
+            this.writeToShell("No package spec was supplied. Run with --help for usage.", undefined, chalk.red);
+            process.exitCode = ExitCodes.NO_PACKAGE_NAME_SUPPLIED;
+            return;
         }
 
-        // Avoid polluting non-empty cwd unrelated to deep-pack
-        const cwdFiles = await fsPromises.readdir(process.cwd());
-        if (cwdFiles.length > 0 && !cwdFiles.some((path) => path === Files.RESOLVED_DEPS) && !options.outputTgz) {
-            console.log("Detected non-empty directory, Creating dedicated directory for npm-deep-pack");
-            const deepPackDirName = `deep-pack-${rootPackage.normalizedNameForPath}_${rootPackage.version}`;
-            if (!fs.existsSync(deepPackDirName)) await fsPromises.mkdir(deepPackDirName);
-            process.chdir(deepPackDirName);
-        }
-
-        if (this.options.outDeps && !options.outputTgz) {
-            this.depsWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.DEPS));
-        }
-        if (this.options.outResolvedDeps && !options.outputTgz) {
-            this.depsResolvedWriteStream = fs.createWriteStream(path.resolve(process.cwd(), Files.RESOLVED_DEPS), {
-                flags: "a",
-            });
-        }
-
-        const dependencies: Dependencies = new Dependencies(rootPackage);
-        dependencies.on(DependenciesEvents.PACKAGE_DISCOVERED, async (pkg: Package) => {
-            if (this.depsWriteStream) {
-                this.depsWriteStream.write(`${pkg.fullName}${os.EOL}`);
+        let rootPackage: Package;
+        try {
+            rootPackage = await Package.fromString(packageUserSuppliedName);
+        } catch (error) {
+            if (error instanceof PackageSpecError) {
+                if (error.kind === "invalid") {
+                    this.writeToShell(error.message, undefined, chalk.red);
+                    process.exitCode = ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED;
+                } else {
+                    this.printSummary([], { fatalErrors: [error.message] });
+                    process.exitCode = ExitCodes.GENERAL_ERROR;
+                }
+                return;
             }
-        });
-        dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, async (pkg: Package) => {
-            try {
-                this.depsResolvedWriteStream.write(`${pkg.fullName}${os.EOL}`);
-                this.writeToShell(`${pkg} resolved`, undefined, chalk.green);
-            } catch (err) {
-                console.warn(err);
-            }
-        });
-        dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, async (pkg: Package) => {
-            // ------------------- UI -------------------
-            const dependentOrDependentsStr = pkg.dependentOrDependentsToString();
+            throw error;
+        }
+
+        if (Program.packageLockMode && options.maxDepth !== undefined) {
+            this.writeToShell("--max-depth is ignored for a lock file", undefined, chalk.yellow);
+        }
+
+        if (Program.packageLockMode && this.options.devRecursive) {
+            this.writeToShell("--dev-recursive has no effect on a lock file; dev entries are always included.", undefined, chalk.yellow);
+        }
+
+        Program.downloadedPackagesPath.clear();
+
+        const failures = new Map<string, Package>();
+        const onOutputExists = (existing: string) =>
             this.writeToShell(
-                `${pkg} resolve error. requested by: ${dependentOrDependentsStr || "you"}`,
+                `Warning: output destination exists (${existing}); using a timestamped output name instead.`,
                 undefined,
-                chalk.red
+                chalk.yellow
             );
-            // ------------------- UI -------------------
+        try {
+            const outputPath = await withWorkspace(
+                rootPackage,
+                this.options.outputTgz,
+                onOutputExists,
+                async ({ outputPath, tempDir }) => {
+                    Program.tempDir = tempDir;
+                    await this.pack(rootPackage, tempDir, outputPath, failures);
+                    return outputPath;
+                }
+            );
+            const bundleSize = this.options.outputTgz ? (await fsPromises.stat(outputPath)).size : undefined;
+            const { errors } = this.printSummary([...failures.values()], { outputPath, bundleSize });
+            if (errors.length > 0) process.exitCode = ExitCodes.GENERAL_ERROR;
+        } catch (error) {
+            this.writeToShell(`Failed to finish deep-pack: ${errorMessage(error)}`, undefined, chalk.red);
+            this.printSummary([...failures.values()], { fatalErrors: [errorMessage(error)] });
+            process.exitCode = ExitCodes.GENERAL_ERROR;
+        } finally {
+            Program.tempDir = "";
+        }
+    }
+
+    // Downloads the dependency tree into tempDir, then moves it into the output folder or bundles it into the .tgz.
+    private async pack(rootPackage: Package, tempDir: string, outputPath: string, failures: Map<string, Package>) {
+        const discoveredDependencies = new Set<string>();
+        const dependencies = new Dependencies(rootPackage);
+        dependencies.on(DependenciesEvents.PACKAGE_DISCOVERED, (pkg: Package) => {
+            discoveredDependencies.add(pkg.fullName);
         });
-        dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, async (pkg: Package) => {
-            // ------------------- UI -------------------
-            const dependentOrDependentsStr = pkg.dependentOrDependentsToString();
+        dependencies.on(DependenciesEvents.PACKAGE_RESOLVED, (pkg: Package) => {
+            this.writeToShell(`${pkg} resolved`, undefined, chalk.green);
+        });
+        const onFailure = (pkg: Package) => {
+            failures.set(pkg.fullName, pkg);
             this.writeToShell(
-                `${pkg} download error. requested by: ${dependentOrDependentsStr || "you"}`,
+                `${pkg} failed. requested by: ${pkg.dependentOrDependentsToString() || "you"}`,
                 undefined,
-                chalk.red
+                chalk.yellow
             );
-            // ------------------- UI -------------------
-        });
+        };
+        dependencies.on(DependenciesEvents.PACKAGE_RESOLVE_ERROR, onFailure);
+        dependencies.on(DependenciesEvents.PACKAGE_DOWNLOAD_ERROR, onFailure);
 
         await dependencies.load(
             this.options.maxDepth,
             this.options.devDeps,
+            this.options.devRecursive,
             this.options.peerDeps,
             this.options.optionalDeps
         );
-        if (!rootPackage?.resolved) {
-            this.writeToShell("=========================================================", undefined, chalk.yellow);
-            this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);
-            this.writeToShell("=========================================================", undefined, chalk.yellow);
-        }
 
-        if (options.outputTgz) {
-            const t = await import("tar");
-
-            Program.outputTgzPath = `deep-pack-${rootPackage.normalizedNameForPath}_${rootPackage.version}.tgz`;
-            if (fs.existsSync(Program.outputTgzPath))
-                return console.log(`Tgz destination exists(${Program.outputTgzPath}), Skipping tgz creation...`);
-
-            t.create({ gzip: true, file: Program.outputTgzPath }, [...Program.downloadedPackagesPath]).then(
-                async () =>
-                    await Promise.all(
-                        [...Program.downloadedPackagesPath].map(async (pkgPath) => await fsPromises.rm(pkgPath))
-                    )
+        if (this.options.outDeps) {
+            const dependenciesLog = [...discoveredDependencies].join(os.EOL);
+            await fsPromises.writeFile(
+                path.join(tempDir, Files.DEPS),
+                dependenciesLog ? `${dependenciesLog}${os.EOL}` : ""
             );
         }
 
-        console.log(`Resolved ${Program.downloadedPackagesPath.size} packages`);
+        const entries = await fsPromises.readdir(tempDir);
+        if (this.options.outputTgz) {
+            const tar = await import("tar");
+            // tar treats an entry beginning with "@" as a list-file argument.
+            // Prefix entries with "./" so scoped-package tarballs are added as files.
+            await tar.create({ gzip: true, file: outputPath, cwd: tempDir }, entries.map((entry) => `./${entry}`));
+        } else {
+            for (const entry of entries) {
+                await moveFile(path.join(tempDir, entry), path.join(outputPath, entry));
+            }
+        }
     }
 
-    async resumeLastRun() {
-        try {
-            const resolvedPkgsSeparatedByNewLine = (
-                await fsPromises.readFile(path.resolve(process.cwd(), Files.RESOLVED_DEPS))
-            ).toString();
-            const resolvedPkgs: PackageFullName[] = resolvedPkgsSeparatedByNewLine.split(os.EOL);
-            await Package.fillCacheByFullNames(resolvedPkgs);
-        } catch (_error) {}
+    private printSummary(
+        failures: Package[],
+        { outputPath, bundleSize, fatalErrors = [] }: { outputPath?: string; bundleSize?: number; fatalErrors?: string[] } = {}
+    ) {
+        const isWarning = (pkg: Package) => pkg.warning || pkg.optionalEdge === true;
+        const warnings = failures.filter(isWarning);
+        const errors = failures.filter((pkg) => !isWarning(pkg));
+        const totalSize = [...Program.downloadedPackagesPath.values()].reduce((sum, size) => sum + size, 0);
+
+        this.writeToShell("==================== Summary ====================", undefined, chalk.white);
+        if (outputPath) this.writeToShell(`Output: ${outputPath}`);
+        this.writeToShell(`Downloaded: ${Program.downloadedPackagesPath.size} packages, ${outputSize(totalSize)}`);
+        if (bundleSize !== undefined) this.writeToShell(`Bundle size: ${outputSize(bundleSize)}`);
+
+        const printFailures = (label: string, packages: Package[], color: ChalkInstance, count = packages.length) => {
+            this.writeToShell(`${label} (${count})`, undefined, color);
+            for (const pkg of packages) {
+                this.writeToShell(
+                    `- ${pkg.fullName}, requested by ${pkg.dependentOrDependentsToString() || "you"}: ${pkg.failureReason ?? "unknown error"}`,
+                    undefined,
+                    color
+                );
+            }
+        };
+
+        printFailures("Warnings", warnings, chalk.yellow);
+        printFailures("Errors", errors, chalk.red, errors.length + fatalErrors.length);
+        for (const error of fatalErrors) {
+            this.writeToShell(`- deep-pack: ${error}`, undefined, chalk.red);
+        }
+        this.writeToShell("==================================================", undefined, chalk.white);
+        return { warnings, errors };
     }
 
     protected setArgs() {
         program.argument(
             "[spec]",
-            "Package name(and optionally version) or path to a valid package.json. For example, next[@15] or ./package.json"
+            "Package name (and optionally version), or path to a package.json or package-lock.json file. For example, next[@15], ./package.json or ./package-lock.json"
         );
     }
 
     protected setOptions() {
         program.option(
             `-d, --max-depth <depth>`,
-            "max depth. | integer bigger than 1",
-            parseFloat,
-            this.options.maxDepth
+            "maximum dependency depth (positive integer; default: unlimited)",
+            (value: string) => {
+                const parsed = Number.parseInt(value, 10);
+                if (!/^\d+$/.test(value) || parsed <= 0) {
+                    throw new InvalidArgumentError("max-depth must be a positive integer");
+                }
+                return parsed;
+            }
         );
-        program.option(`--dev, --dev-deps`, "Resolve devDependencies");
-        program.option(`-l, --lock <path>`, "Path to a package-lock.json file with exact package versions");
+        program.option(`--dev, --dev-deps`, "Resolve root devDependencies (always on for package.json and lock files)");
+        program.option(`--dev-deps-recursive, --dev-recursive`, "Resolve devDependencies at every level", false);
         program.option(`--no-peer, --no-peer-deps`, "Don't resolve peerDependencies");
-        program.option(`--optional, --optional-deps`, "Resolve optionalDependencies");
-        program.option(`--out-deps <out>`, "Export dependencies list?", this.options.outDeps);
-        program.option(`--out-resolved-deps <out>`, "Export resolved dependencies list?", this.options.outResolvedDeps);
-        program.option(`-r, --resume-last-run <resume>`, "Resume last run?");
-        program.option(`--tgz, --output-tgz`, "Bundle output to tgz", this.options.outputTgz);
+        program.option(`--optional, --optional-deps`, "Resolve optionalDependencies (and the root's optional peers)", false);
+        program.option(`--out-deps`, "Write the discovered dependencies list into the output", false);
+        program.option(`--tgz, --output-tgz`, "Bundle output to tgz", false);
     }
 
     protected setActions() {
         program.action(this.onAction.bind(this));
     }
 
+    // Like Ctrl+L in a shell: scroll the current screen into the scrollback (nothing is erased
+    // or cut) and put the cursor at the top. Skipped when output isn't a terminal.
     public clearShell() {
-        process.stdout.write("\x1Bc");
+        if (!process.stdout.isTTY) return;
+        process.stdout.write("\n".repeat(process.stdout.rows) + "\x1B[H");
     }
 
     public async exec() {
