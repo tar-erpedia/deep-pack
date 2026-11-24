@@ -105,8 +105,7 @@ export default class Program {
             );
         try {
             const outputPath = await withWorkspace(
-                rootPackage.normalizedNameForPath,
-                rootPackage.version,
+                rootPackage,
                 this.options.outputTgz,
                 onOutputExists,
                 async ({ outputPath, tempDir }) => {

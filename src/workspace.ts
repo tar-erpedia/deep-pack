@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type Package from "./package.js";
 import { sanitizePathComponent, timestampSuffix } from "./utils.js";
 
 export interface Workspace {
@@ -39,13 +40,12 @@ function reserveOutputPath(name: string, version: string, outputTgz: boolean, on
 // work fails or the user presses Ctrl+C. Setup is synchronous so no signal can arrive between creating a path and
 // knowing about it, and the Ctrl+C cleanup is synchronous because it must finish before process.exit.
 export async function withWorkspace<T>(
-    name: string,
-    version: string,
+    rootPackage: Package,
     outputTgz: boolean,
     onOutputExists: (existingPath: string) => void,
     work: (workspace: Workspace) => Promise<T>
 ): Promise<T> {
-    const outputPath = reserveOutputPath(name, version, outputTgz, onOutputExists);
+    const outputPath = reserveOutputPath(rootPackage.normalizedNameForPath, rootPackage.version, outputTgz, onOutputExists);
     let tempDir: string;
     try {
         tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "deep-pack-"));

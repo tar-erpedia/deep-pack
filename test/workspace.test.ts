@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Package from "../src/package.js";
 import { withWorkspace } from "../src/workspace.js";
 
 // node --test runs each test file in its own process, so changing cwd here does not leak into other files.
@@ -15,18 +16,19 @@ after(() => {
 });
 
 const noop = () => {};
+const pkg = Package.fromNameAndVersion;
 
 test("a taken output name gets a timestamped name and is reported once", async () => {
     const taken: string[] = [];
-    const first = await withWorkspace("@scope/pkg", "1.0.0", false, (p) => taken.push(p), async (ws) => ws.outputPath);
-    const second = await withWorkspace("@scope/pkg", "1.0.0", false, (p) => taken.push(p), async (ws) => ws.outputPath);
+    const first = await withWorkspace(pkg("@scope/pkg", "1.0.0"), false, (p) => taken.push(p), async (ws) => ws.outputPath);
+    const second = await withWorkspace(pkg("@scope/pkg", "1.0.0"), false, (p) => taken.push(p), async (ws) => ws.outputPath);
     assert.equal(path.basename(first), "deep-pack-@scope_pkg_1.0.0");
     assert.match(path.basename(second), /^deep-pack-@scope_pkg_1\.0\.0_\d{8}-\d{6}$/);
     assert.deepEqual(taken, [first]);
 });
 
 test("--tgz reserves an empty .tgz placeholder", async () => {
-    await withWorkspace("tgz-pkg", "2.0.0", true, noop, async (ws) => {
+    await withWorkspace(pkg("tgz-pkg", "2.0.0"), true, noop, async (ws) => {
         assert.equal(path.basename(ws.outputPath), "deep-pack-tgz-pkg_2.0.0.tgz");
         assert.equal(fs.statSync(ws.outputPath).size, 0);
     });
@@ -34,7 +36,7 @@ test("--tgz reserves an empty .tgz placeholder", async () => {
 
 test("success keeps the output, removes the temp dir and the SIGINT handler", async () => {
     const listeners = process.listenerCount("SIGINT");
-    const ws = await withWorkspace("ok-pkg", "1.0.0", false, noop, async (ws) => {
+    const ws = await withWorkspace(pkg("ok-pkg", "1.0.0"), false, noop, async (ws) => {
         assert.equal(process.listenerCount("SIGINT"), listeners + 1);
         return ws;
     });
@@ -46,7 +48,7 @@ test("success keeps the output, removes the temp dir and the SIGINT handler", as
 test("failure removes the output and the temp dir and rethrows", async () => {
     let seen: { outputPath: string; tempDir: string } | undefined;
     await assert.rejects(
-        withWorkspace("fail-pkg", "1.0.0", false, noop, async (ws) => {
+        withWorkspace(pkg("fail-pkg", "1.0.0"), false, noop, async (ws) => {
             seen = ws;
             throw new Error("boom");
         }),
@@ -61,7 +63,7 @@ test("if the temp dir cannot be created, the reserved output is removed", async 
     const saved = tempVars.map((name) => process.env[name]);
     for (const name of tempVars) process.env[name] = path.join(cwd, "does-not-exist");
     try {
-        await assert.rejects(withWorkspace("no-temp-pkg", "1.0.0", false, noop, async () => {}));
+        await assert.rejects(withWorkspace(pkg("no-temp-pkg", "1.0.0"), false, noop, async () => {}));
     } finally {
         tempVars.forEach((name, i) => (saved[i] === undefined ? delete process.env[name] : (process.env[name] = saved[i])));
     }
@@ -75,7 +77,7 @@ test("a cleanup error does not replace the real result", async () => {
         throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
     };
     try {
-        const result = await withWorkspace("locked-pkg", "1.0.0", false, noop, async (ws) => {
+        const result = await withWorkspace(pkg("locked-pkg", "1.0.0"), false, noop, async (ws) => {
             tempDir = ws.tempDir;
             return "done";
         });
