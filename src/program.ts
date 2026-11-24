@@ -5,11 +5,10 @@ import path from "node:path";
 import Package, { PackageSpecError } from "./package.js";
 import Dependencies, { Events as DependenciesEvents } from "./dependencies.js";
 import os from "node:os";
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import type { Manifest } from "pacote";
 import { errorMessage, moveFile, outputSize } from "./utils.js";
-import { createWorkspace } from "./workspace.js";
+import { withWorkspace } from "./workspace.js";
 
 const ExitCodes = {
     SUCCESS: 0,
@@ -97,32 +96,35 @@ export default class Program {
 
         Program.downloadedPackagesPath.clear();
 
-        const workspace = createWorkspace(rootPackage.normalizedNameForPath, rootPackage.version, this.options.outputTgz, (existing) =>
+        const failures = new Map<string, Package>();
+        const onOutputExists = (existing: string) =>
             this.writeToShell(
                 `Warning: output destination exists (${existing}); using a timestamped output name instead.`,
                 undefined,
                 chalk.yellow
-            )
-        );
-        const { outputPath, tempDir } = workspace;
-        Program.tempDir = tempDir;
-
-        const failures = new Map<string, Package>();
+            );
         try {
-            await this.pack(rootPackage, tempDir, outputPath, failures);
+            const outputPath = await withWorkspace(
+                rootPackage.normalizedNameForPath,
+                rootPackage.version,
+                this.options.outputTgz,
+                onOutputExists,
+                async ({ outputPath, tempDir }) => {
+                    Program.tempDir = tempDir;
+                    await this.pack(rootPackage, tempDir, outputPath, failures);
+                    return outputPath;
+                }
+            );
+            const bundleSize = this.options.outputTgz ? (await fsPromises.stat(outputPath)).size : undefined;
+            const { errors } = this.printSummary([...failures.values()], { outputPath, bundleSize });
+            if (errors.length > 0) process.exitCode = ExitCodes.GENERAL_ERROR;
         } catch (error) {
-            workspace.discardOutput();
             this.writeToShell(`Failed to finish deep-pack: ${errorMessage(error)}`, undefined, chalk.red);
             this.printSummary([...failures.values()], { fatalErrors: [errorMessage(error)] });
             process.exitCode = ExitCodes.GENERAL_ERROR;
-            return;
         } finally {
-            workspace.dispose();
+            Program.tempDir = "";
         }
-
-        const bundleSize = this.options.outputTgz ? fs.statSync(outputPath).size : undefined;
-        const { errors } = this.printSummary([...failures.values()], { outputPath, bundleSize });
-        if (errors.length > 0) process.exitCode = ExitCodes.GENERAL_ERROR;
     }
 
     // Downloads the dependency tree into tempDir, then moves it into the output folder or bundles it into the .tgz.
@@ -174,6 +176,7 @@ export default class Program {
             }
         }
     }
+
     private printSummary(
         failures: Package[],
         { outputPath, bundleSize, fatalErrors = [] }: { outputPath?: string; bundleSize?: number; fatalErrors?: string[] } = {}
