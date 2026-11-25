@@ -59,11 +59,15 @@ export default class Dependencies extends EventEmitter {
     }
 
     async resolveRecursive(pkg: Package) {
-        if (pkg.error || pkg.resolved) return;
+        // `resolving` is set before the first await. Otherwise two dependents finishing at the same time
+        // both pass the `resolved` check and the package is downloaded and reported twice.
+        if (pkg.error || pkg.resolved || pkg.resolving) return;
+        pkg.resolving = true;
         if (pkg.existsInRegistry || pkg.existsInRegistry === TriStates.UNKNOWN) {
             try {
                 await pkg.download();
             } catch (_ex) {
+                pkg.resolving = false;
                 this.emit(Events.PACKAGE_DOWNLOAD_ERROR, pkg);
                 return;
             }
@@ -71,6 +75,7 @@ export default class Dependencies extends EventEmitter {
         this.emit(Events.PACKAGE_RESOLVED, pkg);
 
         pkg.resolved = true;
+        pkg.resolving = false;
         pkg.loading = false;
         for (const dependent of pkg.dependents) {
             if (dependent.dependencies.every((dependency) => dependency.resolved)) {

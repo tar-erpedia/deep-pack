@@ -50,6 +50,7 @@ export default class Program {
     protected depsResolvedWriteStream: fs.WriteStream = fs.createWriteStream(os.devNull);
     protected packageJSONData: Partial<Manifest> | undefined;
     protected optionArgs: OptionValues | undefined;
+    protected skippedSpecs: string[] = [];
     protected options: Options = defaultOptions;
     public static outputTgzPath: string = "";
     public static downloadedPackagesPath = new Set<string>();
@@ -67,31 +68,63 @@ export default class Program {
         this.packageJSONData = (await import("../package.json", { with: { type: "json" } })).default;
     }
 
-    protected async onAction(packageUserSuppliedName: string | undefined, options: Options) {
+    protected async onAction(packageUserSuppliedNames: string[], options: Options & { outDir?: string }) {
         this.options = options;
-        if (this.options.resumeLastRun) {
-            this.resumeLastRun();
+        const specs = packageUserSuppliedNames ?? [];
+
+        // Roots are resolved before changing directory, so relative package.json paths still work.
+        const rootPackages: Package[] = [];
+        if (this.options.lock) {
+            const lockRoot = await Package.fromPackageLock(this.options.lock, this.options.devDeps);
+            if (lockRoot) rootPackages.push(lockRoot);
+        } else {
+            for (const spec of specs) {
+                const root = await Package.fromString(spec);
+                if (!root) {
+                    // One bad spec must not abort the others. Exit only if nothing valid is left (below).
+                    this.writeToShell(
+                        `Skipping "${spec}": not a valid/existing package name or package.json path`,
+                        undefined,
+                        chalk.red
+                    );
+                    this.skippedSpecs.push(spec);
+                    continue;
+                }
+                if (!rootPackages.includes(root)) rootPackages.push(root);
+            }
         }
-        const rootPackage: Package | undefined = this.options.lock
-            ? await Package.fromPackageLock(this.options.lock, this.options.devDeps)
-            : packageUserSuppliedName
-              ? await Package.fromString(packageUserSuppliedName)
-              : undefined;
+        const rootPackage = rootPackages[0];
         if (!rootPackage) {
-            const invalidSpec = this.options.lock ?? packageUserSuppliedName ?? "";
+            const invalidSpec = this.options.lock ?? "";
             return this.exit(
                 ExitCodes.INVALID_PACKAGE_NAME_SUPPLIED,
-                `"${invalidSpec}" is not a valid package name or package-lock.json path`
+                invalidSpec
+                    ? `"${invalidSpec}" is not a valid package-lock.json path`
+                    : "No package name or package.json path supplied"
             );
         }
 
-        // Avoid polluting non-empty cwd unrelated to deep-pack
-        const cwdFiles = await fsPromises.readdir(process.cwd());
-        if (cwdFiles.length > 0 && !cwdFiles.some((path) => path === Files.RESOLVED_DEPS) && !options.outputTgz) {
-            console.log("Detected non-empty directory, Creating dedicated directory for npm-deep-pack");
-            const deepPackDirName = `deep-pack-${rootPackage.normalizedNameForPath}_${rootPackage.version}`;
-            if (!fs.existsSync(deepPackDirName)) await fsPromises.mkdir(deepPackDirName);
-            process.chdir(deepPackDirName);
+        // Avoid polluting non-empty cwd unrelated to deep-pack.
+        // An explicit --out-dir is always used, so many runs can share one destination and skip existing files.
+        if (options.outDir) {
+            await fsPromises.mkdir(options.outDir, { recursive: true });
+            process.chdir(options.outDir);
+        } else {
+            const cwdFiles = await fsPromises.readdir(process.cwd());
+            if (cwdFiles.length > 0 && !cwdFiles.some((path) => path === Files.RESOLVED_DEPS) && !options.outputTgz) {
+                console.log("Detected non-empty directory, Creating dedicated directory for npm-deep-pack");
+                const deepPackDirName =
+                    rootPackages.length > 1
+                        ? "deep-pack-multiple"
+                        : `deep-pack-${rootPackage.normalizedNameForPath}_${rootPackage.version}`;
+                if (!fs.existsSync(deepPackDirName)) await fsPromises.mkdir(deepPackDirName);
+                process.chdir(deepPackDirName);
+            }
+        }
+
+        // Must run in the final directory and be awaited, otherwise the previous run log is read too late (or not at all).
+        if (this.options.resumeLastRun) {
+            await this.resumeLastRun();
         }
 
         if (this.options.outDeps && !options.outputTgz) {
@@ -138,13 +171,16 @@ export default class Program {
             // ------------------- UI -------------------
         });
 
-        await dependencies.load(
-            this.options.maxDepth,
-            this.options.devDeps,
-            this.options.peerDeps,
-            this.options.optionalDeps
-        );
-        if (!rootPackage?.resolved) {
+        for (const root of rootPackages) {
+            dependencies.rootPackage = root;
+            await dependencies.load(
+                this.options.maxDepth,
+                this.options.devDeps,
+                this.options.peerDeps,
+                this.options.optionalDeps
+            );
+        }
+        if (rootPackages.some((root) => !root.resolved)) {
             this.writeToShell("=========================================================", undefined, chalk.yellow);
             this.writeToShell("please run again. there are more dependencies to resolve.", undefined, chalk.yellow);
             this.writeToShell("=========================================================", undefined, chalk.yellow);
@@ -166,6 +202,9 @@ export default class Program {
         }
 
         console.log(`Resolved ${Program.downloadedPackagesPath.size} packages`);
+        if (this.skippedSpecs.length > 0) {
+            this.writeToShell(`Skipped invalid specs: ${this.skippedSpecs.join(", ")}`, undefined, chalk.yellow);
+        }
     }
 
     async resumeLastRun() {
@@ -173,15 +212,16 @@ export default class Program {
             const resolvedPkgsSeparatedByNewLine = (
                 await fsPromises.readFile(path.resolve(process.cwd(), Files.RESOLVED_DEPS))
             ).toString();
-            const resolvedPkgs: PackageFullName[] = resolvedPkgsSeparatedByNewLine.split(os.EOL);
-            await Package.fillCacheByFullNames(resolvedPkgs);
+            // split on both line endings, the log may have been written on another OS or edited by hand
+            const resolvedPkgs: PackageFullName[] = resolvedPkgsSeparatedByNewLine.split(/\r?\n/);
+            Package.fillCacheByFullNames(resolvedPkgs);
         } catch (_error) {}
     }
 
     protected setArgs() {
         program.argument(
-            "[spec]",
-            "Package name(and optionally version) or path to a valid package.json. For example, next[@15] or ./package.json"
+            "[spec...]",
+            "Package name(and optionally version) or path to a valid package.json. Several specs are allowed and share one destination. For example, next[@15] or ./package.json"
         );
     }
 
@@ -198,7 +238,9 @@ export default class Program {
         program.option(`--optional, --optional-deps`, "Resolve optionalDependencies");
         program.option(`--out-deps <out>`, "Export dependencies list?", this.options.outDeps);
         program.option(`--out-resolved-deps <out>`, "Export resolved dependencies list?", this.options.outResolvedDeps);
-        program.option(`-r, --resume-last-run <resume>`, "Resume last run?");
+        program.option(`-o, --out-dir <dir>`, "Destination directory. Files that already exist there are not downloaded again");
+        program.option(`-r, --resume-last-run`, "Resume last run (default: true)", true);
+        program.option(`--no-resume-last-run`, "Ignore the log of the last run");
         program.option(`--tgz, --output-tgz`, "Bundle output to tgz", this.options.outputTgz);
     }
 

@@ -54,16 +54,20 @@ export default class Package {
     static readonly MAX_TRIES: number = 3;
 
     private packageJson: string = "";
+    private downloading?: Promise<void>;
     public dependencies: Package[] = [];
     public dependents: Package[] = [];
     public error: boolean = false;
     public existsInRegistry: TriState = TriStates.UNKNOWN;
     public loading: boolean = false;
+    // True while the package is being downloaded/resolved, prevents resolving the same package twice concurrently.
+    public resolving: boolean = false;
     public name: string;
     public resolved: boolean = false;
     public version: string;
 
     static cache = new Map<PackageFullName, Package>();
+    private static readonly specCache = new Map<string, Promise<Package | undefined>>();
 
     public get isRoot(): boolean {
         return this.dependents.length === 0;
@@ -74,6 +78,10 @@ export default class Package {
     }
     public get normalizedNameForPath(): string {
         return this.name.replace("/", "_");
+    }
+
+    public get tarballPath(): string {
+        return `./${this.normalizedNameForPath}-${this.version}.tgz`;
     }
 
     protected constructor(name: string, version?: string) {
@@ -98,28 +106,50 @@ export default class Package {
         }
     }
 
-    // Downloads this package tarball unless it is the root package in file-based mode.
-    public async download(): Promise<void> {
+    // Downloads this package tarball unless it is the root package in file-based mode
+    // or the file already exists in the destination directory.
+    public download(): Promise<void> {
+        // Concurrent callers share one download instead of fetching the same tarball twice.
+        this.downloading ??= this.downloadOnce().catch((err) => {
+            this.downloading = undefined;
+            throw err;
+        });
+        return this.downloading;
+    }
+
+    private async downloadOnce(): Promise<void> {
         if (!this.fullName) {
             throw "Not enough data to download tgz file - missing or invalid package name or version";
         }
         if ((Program.packageJsonMode || Program.packageLockMode) && this.isRoot) return;
 
-        let triesCount = 0;
-        do {
-            try {
-                const downloadPath = `./${this.normalizedNameForPath}-${this.version}.tgz`;
-                if (fs.existsSync(downloadPath)) return;
-                await pacote.tarball.file(this.fullName, downloadPath);
-
+        const downloadPath = this.tarballPath;
+        try {
+            // Only trust non-empty files. Partial downloads are written to a temp name, so they never match here.
+            if ((await fsPromises.stat(downloadPath)).size > 0) {
+                console.log(`${this} already exists, skipping download`);
                 Program.downloadedPackagesPath.add(downloadPath);
-                break;
-            } catch (err) {
-                console.log(`Failed downloading - ${err}. Retrying...`);
+                return;
             }
-        } while (++triesCount < Package.MAX_TRIES);
-        if (triesCount === Package.MAX_TRIES)
-            throw new Error(`Downloading ${this} failed, Reached maximum retry attempts`);
+        } catch (_err) {
+            // not downloaded yet
+        }
+
+        const tempPath = `${downloadPath}.part`;
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= Package.MAX_TRIES; attempt++) {
+            try {
+                await pacote.tarball.file(this.fullName, tempPath);
+                await fsPromises.rename(tempPath, downloadPath);
+                Program.downloadedPackagesPath.add(downloadPath);
+                return;
+            } catch (err) {
+                lastError = err;
+                console.log(`Failed downloading ${this} - ${err}. Attempt ${attempt}/${Package.MAX_TRIES}`);
+                await fsPromises.rm(tempPath, { force: true });
+            }
+        }
+        throw new Error(`Downloading ${this} failed, Reached maximum retry attempts: ${lastError}`);
     }
 
     // Resolves this package dependencies from npm metadata or from preloaded lockfile data.
@@ -135,7 +165,10 @@ export default class Package {
         }
 
         const responseBodyAsJSON = await pacote
-            .manifest(Program.packageJsonMode && this.isRoot ? path.dirname(this.packageJson) : this.fullName)
+            .manifest(Program.packageJsonMode && this.isRoot ? path.dirname(this.packageJson) : this.fullName, {
+                // The abbreviated registry metadata may omit devDependencies. Only the root needs them.
+                fullMetadata: includeDevDependencies && this.isRoot,
+            })
             .catch((err: Error & { code: string }) => {
                 console.log(err);
                 switch (err.code) {
@@ -161,46 +194,39 @@ export default class Package {
             throw Errors.UNKNOWN_ERROR;
         }
 
-        if (
-            !responseBodyAsJSON.dependencies &&
-            !responseBodyAsJSON.devDependencies &&
-            !responseBodyAsJSON.peerDependencies &&
-            !responseBodyAsJSON.optionalDependencies
-        ) {
-            // special case: dependencies node doesn't exist, but tarball exists.
-            return [];
-        }
+        // Map keeps one entry per name. Earlier kinds win (dependencies > peer > optional > dev).
+        const selected = new Map<string, string>();
+        const add = (entries: Record<string, string> | null | undefined, filter?: (name: string) => boolean) => {
+            for (const [name, range] of Object.entries(entries ?? {})) {
+                if (!selected.has(name) && (!filter || filter(name))) selected.set(name, range);
+            }
+        };
+        const peerMeta = responseBodyAsJSON.peerDependenciesMeta;
+        const isOptionalPeer = (peer: string) => !!peerMeta?.[peer]?.optional;
 
-        const selectedDependencies = Object.entries(responseBodyAsJSON.dependencies ?? {});
-
-        if (includeDevDependencies && responseBodyAsJSON.devDependencies) {
-            selectedDependencies.push(...Object.entries(responseBodyAsJSON.devDependencies));
+        add(responseBodyAsJSON.dependencies);
+        // Peer dependencies marked as optional are ignored unless optional dependencies were requested
+        if (includePeerDependencies) {
+            add(responseBodyAsJSON.peerDependencies, (peer) => includeOptionalDependencies || !isOptionalPeer(peer));
         }
+        if (includeOptionalDependencies) add(responseBodyAsJSON.optionalDependencies);
+        if (includeDevDependencies) add(responseBodyAsJSON.devDependencies);
 
-        if (includePeerDependencies && responseBodyAsJSON.peerDependencies) {
-            selectedDependencies.push(
-                ...Object.entries(responseBodyAsJSON.peerDependencies).filter(
-                    // Ignore peer dependencies marked as optional, just as npm does
-                    ([peer, _ver]) => !responseBodyAsJSON.peerDependenciesMeta?.[peer]?.optional
-                )
-            );
-        }
-
-        if (includeOptionalDependencies && responseBodyAsJSON.optionalDependencies) {
-            selectedDependencies.push(
-                ...Object.entries(responseBodyAsJSON.optionalDependencies),
-                // Include "optional" peer dependencies
-                ...Object.entries(responseBodyAsJSON.peerDependencies ?? {})
-            );
-        }
+        const resolvedDeps = await Promise.all(
+            [...selected.entries()].map(async ([depName, depVersion]) => {
+                try {
+                    const { raw: packageString } = npa.resolve(depName, depVersion);
+                    return packageString ? await Package.fromString(packageString) : undefined;
+                } catch (err) {
+                    console.error(`Invalid dependency ${depName}@${depVersion} of ${this}: ${err}`);
+                    return undefined;
+                }
+            })
+        );
 
         const result: Package[] = [];
-        for (const [depName, depVersion] of selectedDependencies) {
-            const { raw: packageString } = npa.resolve(depName, depVersion);
-            if (!packageString) continue;
-
-            const dependency = await Package.fromString(packageString);
-            if (!dependency) continue;
+        for (const dependency of resolvedDeps) {
+            if (!dependency || result.includes(dependency)) continue;
             // check for cyclic dependency (I.E. https://registry.npmjs.org/@types/koa-compose/latest)
             if (this.isAncestorEqual(dependency)) continue;
 
@@ -212,14 +238,14 @@ export default class Package {
         return result;
     }
 
-    public isAncestorEqual(pkg: Package): boolean {
+    public isAncestorEqual(pkg: Package, visited: Set<Package> = new Set()): boolean {
         if (pkg.isEqual(this)) {
             return true;
         }
-        if (this.isRoot) {
-            return false;
-        }
-        return this.dependents.some((dependent) => dependent.isAncestorEqual(pkg));
+        // Without the visited set every path through the dependents graph is walked, which is exponential.
+        if (visited.has(this)) return false;
+        visited.add(this);
+        return this.dependents.some((dependent) => dependent.isAncestorEqual(pkg, visited));
     }
 
     public isEqual(pkg: Package): boolean {
@@ -231,12 +257,17 @@ export default class Package {
     }
 
     // Restores previously resolved packages into cache so reruns can skip finished work.
-    static async fillCacheByFullNames(fullNames: PackageFullName[]) {
+    static fillCacheByFullNames(fullNames: PackageFullName[]) {
         for (const fullName of fullNames) {
-            const pkg = await Package.fromString(fullName);
-            if (pkg === undefined) continue;
-            pkg.resolved = true;
-            Package.cache.set(fullName, pkg);
+            const trimmed = fullName.trim();
+            if (!trimmed) continue;
+            try {
+                const { name, rawSpec } = npa(trimmed);
+                if (!name || !rawSpec) continue;
+                Package.fromNameAndVersion(name, rawSpec).resolved = true;
+            } catch (_err) {
+                // ignore malformed lines
+            }
         }
     }
 
@@ -326,30 +357,63 @@ export default class Package {
         }
     }
 
-    // Creates a package from a package.json path or an npm package spec.
-    static async fromString(packageNameInAnyFormat: string): Promise<Package | undefined> {
+    private static isFile(candidate: string): boolean {
         try {
-            // Treat as path to package.json
-            if (fs.existsSync(packageNameInAnyFormat)) {
-                console.log(`${packageNameInAnyFormat} is a file, using as package.json`);
-                Program.packageJsonMode = true;
+            return fs.statSync(candidate).isFile();
+        } catch (_err) {
+            return false;
+        }
+    }
 
-                const packageJsonFile = (await fsPromises.readFile(packageNameInAnyFormat)).toString();
-                const packageJson = JSON.parse(packageJsonFile) as Manifest;
-                if (!packageJson.name) throw new Error("Invalid package.json format, missing or invalid name");
+    // Creates a package from a package.json path or an npm package spec.
+    static fromString(packageNameInAnyFormat: string): Promise<Package | undefined> {
+        // Treat as path to package.json. Directories and unrelated files must not hijack package specs.
+        if (Package.isFile(packageNameInAnyFormat)) return Package.fromPackageJsonFile(packageNameInAnyFormat);
 
-                const pkg = Package.fromNameAndVersion(packageJson.name, packageJson.version ?? LATEST);
-                pkg.packageJson = path.resolve(packageNameInAnyFormat);
-                return pkg;
-            }
+        // The same spec is requested by many dependents, resolve each spec over the network only once.
+        let result = Package.specCache.get(packageNameInAnyFormat);
+        if (!result) {
+            result = Package.fromSpec(packageNameInAnyFormat);
+            Package.specCache.set(packageNameInAnyFormat, result);
+        }
+        return result;
+    }
+
+    private static async fromPackageJsonFile(packageJsonPath: string): Promise<Package | undefined> {
+        try {
+            console.log(`${packageJsonPath} is a file, using as package.json`);
+            Program.packageJsonMode = true;
+
+            // pacote reads the manifest from the directory, so the file has to be called package.json
+            if (path.basename(packageJsonPath).toLowerCase() !== "package.json")
+                throw new Error(
+                    `the file must be named "package.json" (got "${path.basename(packageJsonPath)}"), put it in its own folder`
+                );
+
+            const packageJsonFile = (await fsPromises.readFile(packageJsonPath)).toString();
+            const packageJson = JSON.parse(packageJsonFile) as Manifest;
+            if (!packageJson.name) throw new Error("Invalid package.json format, missing or invalid name");
+
+            const pkg = Package.fromNameAndVersion(packageJson.name, packageJson.version ?? LATEST);
+            pkg.packageJson = path.resolve(packageJsonPath);
+            return pkg;
+        } catch (ex) {
+            const reason = ex instanceof Error ? ex.message : String(ex);
+            console.error(`Failed to read package.json "${packageJsonPath}": ${reason}`);
+            return undefined;
+        }
+    }
+
+    private static async fromSpec(spec: string): Promise<Package | undefined> {
+        try {
             // Validate package name and version
-            npa(packageNameInAnyFormat);
+            npa(spec);
 
-            const { name, version } = await pacote.manifest(packageNameInAnyFormat);
+            const { name, version } = await pacote.manifest(spec);
             return Package.fromNameAndVersion(name, version);
         } catch (ex) {
             const reason = ex instanceof Error ? ex.message : String(ex);
-            console.error(`Failed to resolve package spec or package.json "${packageNameInAnyFormat}": ${reason}`);
+            console.error(`Failed to resolve package spec "${spec}": ${reason}`);
             return undefined;
         }
     }
