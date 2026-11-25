@@ -17,7 +17,7 @@ By default direct dependencies and peer dependencies are resolved and downloaded
 ### Usage
 
 ```bash
-npx npm-deep-pack <spec> [options]
+npx npm-deep-pack <spec...> [options]
 ```
 **Aliases**: `deep-pack`, `deep-pack-cli`
 <br>
@@ -55,7 +55,8 @@ npx npm-deep-pack <spec> [options]
 --optional, --optional-deps     Resolve optionalDependencies
 --out-deps <out>                Export dependencies list? (default: false)
 --out-resolved-deps <out>       Export resolved dependencies list? (default: true)
--r, --resume-last-run <resume>  Resume last run?
+-o, --out-dir <dir>               Destination directory, existing files are not downloaded again
+-r, --resume-last-run           Resume last run (default: true), use --no-resume-last-run to disable
 --tgz, --output-tgz             Bundle output to tgz (default: false)
 -h, --help
 ```
